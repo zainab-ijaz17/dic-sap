@@ -13,24 +13,12 @@ const STOCK_CONFIG = {
     integrationUrl:
       process.env.SAP_STOCK_INTEGRATION_URL_DEV ||
       "https://devspace.test.apimanagement.eu10.hana.ondemand.com/cpd/stock110",
-
-    odataBaseUrl:
-      process.env.SAP_STOCK_ODATA_BASE_URL_DEV ||
-      process.env.SAP_STOCK_ODATA_BASE_URL ||
-      "",
-
-    sapClient: process.env.SAP_STOCK_CLIENT_DEV || "110",
   },
 
   prd: {
     integrationUrl:
       process.env.SAP_STOCK_INTEGRATION_URL_PRD ||
       "https://prdspace.prod01.apimanagement.eu10.hana.ondemand.com/cpd/stock300",
-
-    odataBaseUrl:
-      process.env.SAP_STOCK_ODATA_BASE_URL_PRD || "",
-
-    sapClient: process.env.SAP_STOCK_CLIENT_PRD || "300",
   },
 };
 
@@ -51,171 +39,67 @@ const sapHttp = axios.create({
   httpsAgent: new https.Agent({
     rejectUnauthorized: false,
   }),
-
-  headers: {
-    Accept: "application/json",
-    "Accept-Encoding": "identity",
-  },
-
   timeout: 60000,
 });
 
-function getUserFromHeaders(req) {
-  const auth = req.headers["x-user-auth"];
-
-  if (!auth) return null;
-
-  try {
-    const decoded = Buffer.from(auth, "base64").toString("utf-8");
-
-    const idx = decoded.indexOf(":");
-
-    if (idx <= 0) return null;
-
-    return {
-      username: decoded.slice(0, idx),
-      password: decoded.slice(idx + 1),
-      environment: req.headers["x-user-environment"] || "dev",
-    };
-  } catch {
-    return null;
-  }
-}
-
-function escapeODataString(value) {
-  return String(value).replace(/'/g, "''");
-}
-
-function buildStockODataUrl(materialNumber, sloc, odataConfig) {
-  const filter = [
-    `Material eq '${escapeODataString(materialNumber)}'`,
-    `Plant eq '${PLANT}'`,
-    `StorageLocation eq '${escapeODataString(sloc)}'`,
-  ].join(" and ");
-
-  return `${odataConfig.odataBaseUrl}/C_STOCKQUANTITYVALUEBYTYPE?sap-client=${odataConfig.sapClient}&$filter=${encodeURIComponent(filter)}`;
-}
-
-const INVENTORY_STOCK_TYPE = {
-  UNRESTRICTED: "01",
-  QUALITY: "02",
-  RESERVED: "03",
-  TRANSFER: "04",
-};
-
-function findRowByStockType(rows, stockType) {
-  return rows.find(
-    (row) => String(row.InventoryStockType) === stockType
-  );
-}
-
-function pickQty(row) {
-  if (!row) return 0;
-
-  return Number(row.MatlWrhsStkQtyInMatlBaseUnit ?? 0);
-}
-
-function mapSapResultsToReport(materialNumber, sloc, results) {
-  const rows = Array.isArray(results) ? results : [];
-
-  const first = rows[0] || {};
-
-  const unrestrictedRow = findRowByStockType(
-    rows,
-    INVENTORY_STOCK_TYPE.UNRESTRICTED
-  );
-
-  const qualityRow = findRowByStockType(
-    rows,
-    INVENTORY_STOCK_TYPE.QUALITY
-  );
-
-  const reservedRow = findRowByStockType(
-    rows,
-    INVENTORY_STOCK_TYPE.RESERVED
-  );
-
-  const transferRow = findRowByStockType(
-    rows,
-    INVENTORY_STOCK_TYPE.TRANSFER
-  );
-
-  const transferQty = pickQty(transferRow);
+function getUserFromBody(req) {
+  const { username, password, environment } = req.body || {};
+  if (!username || !password) return null;
 
   return {
-    materialNumber: first.Material || materialNumber,
-    plant: PLANT,
-    sloc: first.StorageLocation || sloc,
-
-    unrestrictedQuantity: pickQty(unrestrictedRow),
-
-    qualityQuantity: pickQty(qualityRow),
-
-    reservedQuantity: pickQty(reservedRow),
-
-    transferSloc:
-      transferRow && transferQty > 0
-        ? transferRow.StorageLocation || ""
-        : "",
+    username: String(username),
+    password: String(password),
+    environment: environment || "dev",
   };
 }
 
+// safer OData filter builder
+function buildFilter(materialNumber, sloc) {
+  return [
+    `Material eq '${materialNumber}'`,
+    `Plant eq '${PLANT}'`,
+    `StorageLocation eq '${sloc}'`,
+  ].join(" and ");
+}
+
 function parseStockResponse(data, materialNumber, sloc) {
-  if (
-    data &&
-    typeof data === "object" &&
-    data.materialNumber != null &&
-    data.unrestrictedQuantity != null
-  ) {
-    return {
-      materialNumber: data.materialNumber,
-      plant: data.plant || PLANT,
-      sloc: data.sloc || sloc,
-
-      unrestrictedQuantity: Number(
-        data.unrestrictedQuantity ?? 0
-      ),
-
-      qualityQuantity: Number(
-        data.qualityQuantity ?? 0
-      ),
-
-      reservedQuantity: Number(
-        data.reservedQuantity ?? 0
-      ),
-
-      transferSloc: data.transferSloc ?? "",
-    };
-  }
-
   const results = data?.d?.results ?? data?.value ?? [];
 
-  if (results.length) {
-    return mapSapResultsToReport(
-      materialNumber,
-      sloc,
-      results
-    );
+  if (!Array.isArray(results) || results.length === 0) {
+    throw Object.assign(new Error("Empty SAP response"), { status: 502 });
   }
 
-  const err = new Error(
-    "Unexpected or empty stock API response."
-  );
+  const first = results[0];
 
-  err.status = 502;
+  return {
+    materialNumber: first.Material || materialNumber,
+    materialType: first.MaterialType || "",
+    plant: PLANT,
+    sloc: first.StorageLocation || sloc,
 
-  throw err;
+    unrestrictedQuantity:
+      results.find(r => r.InventoryStockType === "01")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+
+    qualityQuantity:
+      results.find(r => r.InventoryStockType === "02")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+
+    reservedQuantity:
+      results.find(r => r.InventoryStockType === "03")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+
+    transferSloc:
+      results.find(r => r.InventoryStockType === "04")?.StorageLocation || "",
+  };
 }
 
 function throwSapHttpError(response) {
   const err = new Error(
-    response.data?.message ||
-      response.data?.error?.message?.value ||
-      response.data?.error ||
-      `Stock API returned status ${response.status}`
+    response.data?.error?.message?.value ||
+    response.data?.error ||
+    `SAP returned ${response.status}`
   );
 
   err.status = response.status;
+  err.sapResponseData = response.data;
 
   throw err;
 }
@@ -227,50 +111,40 @@ async function fetchFromIntegrationSuite(
   username,
   password
 ) {
-  const response = await sapHttp.post(
-    integrationUrl,
-    {
-      materialNumber,
-      sloc,
-      plant: PLANT,
+  const url = `${integrationUrl}/$metadata`;
+
+  const filter = buildFilter(materialNumber, sloc);
+
+  console.log("➡️ SAP CALL:", url);
+  console.log("➡️ FILTER:", filter);
+
+  const response = await sapHttp.get(url, {
+    params: {
+      $format: "json",
+      $filter: filter,
     },
-    {
-      auth: {
-        username,
-        password,
-      },
+    auth: { username, password },
+    headers: {
+      Accept: "application/json",
+    },
+    validateStatus: () => true,
+  });
 
-      headers: {
-        "Content-Type": "application/json",
-        "X-Requested-With": "XMLHttpRequest",
-      },
-
-      validateStatus: () => true,
-    }
-  );
+  console.log("⬅️ SAP STATUS:", response.status);
 
   if (response.status >= 400) {
+    console.log("❌ SAP ERROR BODY:", response.data);
     throwSapHttpError(response);
   }
 
-  return parseStockResponse(
-    response.data,
-    materialNumber,
-    sloc
-  );
+  return parseStockResponse(response.data, materialNumber, sloc);
 }
 
-async function fetchStock(
-  materialNumber,
-  sloc,
-  username,
-  password,
-  environment
-) {
-  const stockConfig = getStockConfig(environment);
+async function fetchStock(materialNumber, sloc, username, password, environment) {
+  const cfg = getStockConfig(environment);
 
   return fetchFromIntegrationSuite(
-    stockConfig.integrationUrl,
+    cfg.integrationUrl,
     materialNumber,
     sloc,
     username,
@@ -278,42 +152,26 @@ async function fetchStock(
   );
 }
 
-/**
- * GET /api/inventory-report
- */
-router.get("/inventory-report", async (req, res) => {
+router.post("/inventory-report", async (req, res) => {
   try {
     console.log("Inventory report endpoint hit");
 
-    const materialNumber = (
-      req.query.materialNumber || ""
-    ).trim();
+    const materialNumber = (req.body?.materialNumber || "").trim();
+    const sloc = (req.body?.sloc || "").trim();
 
-    const sloc = (
-      req.query.sloc || ""
-    ).trim();
-
-    if (!materialNumber) {
+    if (!materialNumber || !sloc) {
       return res.status(400).json({
         error: "Validation error",
-        message: "Material Number is required",
+        message: "materialNumber and sloc are required",
       });
     }
 
-    if (!sloc) {
-      return res.status(400).json({
-        error: "Validation error",
-        message: "SLOC is required",
-      });
-    }
-
-    const user = getUserFromHeaders(req);
+    const user = getUserFromBody(req);
 
     if (!user) {
       return res.status(401).json({
-        error: "Authentication required",
-        message:
-          "X-User-Auth header is required",
+        error: "Auth required",
+        message: "Missing credentials",
       });
     }
 
@@ -328,15 +186,12 @@ router.get("/inventory-report", async (req, res) => {
     return res.json(report);
 
   } catch (err) {
-    console.error("Inventory report error:", err);
+    console.error("❌ Inventory report error:", err.message);
 
-    return res.status(
-      err.status || 500
-    ).json({
+    return res.status(err.status || 500).json({
       error: "Server error",
-      message:
-        err.message ||
-        "Failed to fetch inventory report",
+      message: err.message,
+      sap: err.sapResponseData || null,
     });
   }
 });

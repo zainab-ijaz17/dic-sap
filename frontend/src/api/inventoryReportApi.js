@@ -6,42 +6,79 @@ import { INVENTORY_REPORT_PLANT } from "../constants/inventoryReport";
 export function getMockInventoryReport(materialNumber, sloc) {
   return {
     materialNumber: materialNumber.trim().toUpperCase(),
+    materialType: "ZHLB",
     plant: INVENTORY_REPORT_PLANT,
     sloc: sloc.trim().toUpperCase(),
+
     unrestrictedQuantity: 250,
     qualityQuantity: 40,
     reservedQuantity: 15,
+
     transferSloc: "SF03",
   };
 }
 
-const useClientMock = process.env.REACT_APP_INVENTORY_REPORT_MOCK === "true";
+const useClientMock =
+  process.env.REACT_APP_INVENTORY_REPORT_MOCK === "true";
 
 function getApiBaseUrl(environment) {
   return apiEndpoints[environment] || apiEndpoints.dev;
 }
 
-export async function fetchInventoryReport(materialNumber, sloc, creds) {
+export async function fetchInventoryReport(
+  materialNumber,
+  sloc,
+  creds
+) {
   if (useClientMock) {
     await new Promise((resolve) => setTimeout(resolve, 400));
-    return getMockInventoryReport(materialNumber, sloc);
+
+    return getMockInventoryReport(
+      materialNumber,
+      sloc
+    );
   }
 
-  const baseUrl = getApiBaseUrl(creds.environment);
-  const isSapCf = baseUrl.includes('sap-app.cfapps');
+  const normalizedEnvironment =
+    creds.environment === "300" ||
+    creds.environment === "prd"
+      ? "prd"
+      : "dev";
 
-  const response = await axios.get(
+  const baseUrl = getApiBaseUrl(
+    normalizedEnvironment
+  );
+
+  console.log("Inventory API Base URL:", baseUrl);
+  console.log(
+    "Inventory Environment:",
+    normalizedEnvironment
+  );
+
+  const response = await axios.post(
     `${baseUrl}/api/inventory-report`,
- {
-      params: { materialNumber: materialNumber.trim(), sloc: sloc.trim() },
+    {
+      username: creds.username,
+      password: creds.password,
+
+      environment: normalizedEnvironment,
+
+      materialNumber:
+        materialNumber.trim(),
+
+      sloc: sloc.trim(),
+    },
+    {
       headers: {
         "Content-Type": "application/json",
-        "X-User-Auth": btoa(`${creds.username}:${creds.password}`),
-        "X-User-Environment": creds.environment,
       },
+
+      timeout: 60000,
     }
   );
+
   return response.data;
 }
 
-export const isInventoryReportMockEnabled = useClientMock;
+export const isInventoryReportMockEnabled =
+  useClientMock;
