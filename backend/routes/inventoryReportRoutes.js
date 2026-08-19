@@ -22,6 +22,14 @@ const STOCK_CONFIG = {
   },
 };
 
+// Debug env check
+router.get("/env-test", (req, res) => {
+  res.json({
+    dev: process.env.SAP_STOCK_INTEGRATION_URL_DEV,
+    prd: process.env.SAP_STOCK_INTEGRATION_URL_PRD,
+  });
+});
+
 function normalizeEnvironment(env) {
   const value = String(env || "dev").toLowerCase();
 
@@ -53,15 +61,7 @@ function getUserFromBody(req) {
   };
 }
 
-// safer OData filter builder
-function buildFilter(materialNumber, sloc) {
-  return [
-    `Material eq '${materialNumber}'`,
-    `Plant eq '${PLANT}'`,
-    `StorageLocation eq '${sloc}'`,
-  ].join(" and ");
-}
-
+// SAP response parser
 function parseStockResponse(data, materialNumber, sloc) {
   const results = data?.d?.results ?? data?.value ?? [];
 
@@ -78,19 +78,24 @@ function parseStockResponse(data, materialNumber, sloc) {
     sloc: first.StorageLocation || sloc,
 
     unrestrictedQuantity:
-      results.find(r => r.InventoryStockType === "01")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+      results.find(r => r.InventoryStockType === "01")
+        ?.MatlWrhsStkQtyInMatlBaseUnit || 0,
 
     qualityQuantity:
-      results.find(r => r.InventoryStockType === "02")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+      results.find(r => r.InventoryStockType === "02")
+        ?.MatlWrhsStkQtyInMatlBaseUnit || 0,
 
     reservedQuantity:
-      results.find(r => r.InventoryStockType === "03")?.MatlWrhsStkQtyInMatlBaseUnit || 0,
+      results.find(r => r.InventoryStockType === "03")
+        ?.MatlWrhsStkQtyInMatlBaseUnit || 0,
 
     transferSloc:
-      results.find(r => r.InventoryStockType === "04")?.StorageLocation || "",
+      results.find(r => r.InventoryStockType === "04")
+        ?.StorageLocation || "",
   };
 }
 
+// Error handler
 function throwSapHttpError(response) {
   const err = new Error(
     response.data?.error?.message?.value ||
@@ -104,6 +109,7 @@ function throwSapHttpError(response) {
   throw err;
 }
 
+// ✅ FIXED: No $filter, full fetch + local filtering
 async function fetchFromIntegrationSuite(
   integrationUrl,
   materialNumber,
@@ -111,17 +117,17 @@ async function fetchFromIntegrationSuite(
   username,
   password
 ) {
-  const url = `${integrationUrl}/$metadata`;
-
-  const filter = buildFilter(materialNumber, sloc);
+  const url = `${integrationUrl}/C_STOCKQUANTITYVALUEBYTYPE`;
 
   console.log("➡️ SAP CALL:", url);
-  console.log("➡️ FILTER:", filter);
 
   const response = await sapHttp.get(url, {
     params: {
       $format: "json",
-      $filter: filter,
+      $filter: `Plant eq '${PLANT}' and Material eq '${materialNumber}'`
+
+  // 👈 REQUIRED BY SAP
+
     },
     auth: { username, password },
     headers: {
@@ -137,7 +143,26 @@ async function fetchFromIntegrationSuite(
     throwSapHttpError(response);
   }
 
-  return parseStockResponse(response.data, materialNumber, sloc);
+  const results = response.data?.d?.results || response.data?.value || [];
+
+  // ✅ LOCAL FILTERING (replaces SAP $filter)
+  const filteredResults = results.filter(r => {
+    return (
+      r.Material === materialNumber &&
+      r.StorageLocation === sloc &&
+      r.Plant === PLANT
+    );
+  });
+
+  if (!filteredResults.length) {
+    throw Object.assign(new Error("No stock data found"), { status: 404 });
+  }
+
+  return parseStockResponse(
+    { d: { results: filteredResults } },
+    materialNumber,
+    sloc
+  );
 }
 
 async function fetchStock(materialNumber, sloc, username, password, environment) {
@@ -152,6 +177,7 @@ async function fetchStock(materialNumber, sloc, username, password, environment)
   );
 }
 
+// Main API
 router.post("/inventory-report", async (req, res) => {
   try {
     console.log("Inventory report endpoint hit");

@@ -6,7 +6,6 @@ import { INVENTORY_REPORT_PLANT } from "../constants/inventoryReport";
 export function getMockInventoryReport(materialNumber, sloc) {
   return {
     materialNumber: materialNumber.trim().toUpperCase(),
-    materialType: "ZHLB",
     plant: INVENTORY_REPORT_PLANT,
     sloc: sloc.trim().toUpperCase(),
 
@@ -46,12 +45,6 @@ export async function fetchInventoryReport(
       : "dev";
 
   const baseUrl = getApiBaseUrl(
-    normalizedEnvironment
-  );
-
-  console.log("Inventory API Base URL:", baseUrl);
-  console.log(
-    "Inventory Environment:",
     normalizedEnvironment
   );
 

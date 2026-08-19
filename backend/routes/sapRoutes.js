@@ -8,7 +8,6 @@ const router = express.Router();
    CONFIG
 ===================================================== */
  
-// TEMP: use the CPD batch proxy for DEV batch-info calls
 const API_URL_DEV = "https://devspace.test.apimanagement.eu10.hana.ondemand.com/cpd/batch";
 const API_URL_PRD = "https://prdspace.prod01.apimanagement.eu10.hana.ondemand.com:443/grp/batch";
  
@@ -27,7 +26,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, OPTIONS",
   "Access-Control-Allow-Headers":
-    "Content-Type, Authorization, X-CSRF-Token, X-User-Auth, X-User-Environment",
+    "Content-Type, Authorization, X-CSRF-Token, X-User-Auth, X-User-Environment, X-User-Plant",
 };
  
 router.use((req, res, next) => {
@@ -49,6 +48,88 @@ function decodeBasicAuth(encoded) {
     throw new Error("Invalid Authorization header");
   }
   return { username, password };
+}
+
+function parseBatchResults(data) {
+  if (!data) return [];
+  if (Array.isArray(data.value)) return data.value;
+  if (Array.isArray(data.d?.results)) return data.d.results;
+  if (data.d && typeof data.d === "object" && !Array.isArray(data.d.results)) {
+    return [data.d];
+  }
+  if (data.Charg || data.Batch || data.BatchNumber) return [data];
+  return [];
+}
+
+function normalizeBatchRecord(record) {
+  if (!record) return null;
+  const qty = record.QTY ?? record.Qty ?? record.Quantity ?? 0;
+  return {
+    ...record,
+    Charg: record.Charg || record.Batch || record.BatchNumber || "",
+    Werks: record.Werks || record.Plant || record.WERKS || "",
+    QTY: qty,
+    Qty: qty,
+  };
+}
+
+async function requestBatchInfo(url, username, password) {
+  const response = await axios.get(url, {
+    auth: { username, password },
+    headers: {
+      Accept: "application/json",
+      "X-Requested-With": "XMLHttpRequest",
+      "Accept-Encoding": SAP_ACCEPT_ENCODING,
+    },
+    httpsAgent,
+    timeout: 30000,
+    validateStatus: () => true,
+  });
+
+  console.log("Batch API request:", url);
+  console.log("Batch API status:", response.status);
+
+  if (response.status >= 400) {
+    return { error: response.data, status: response.status };
+  }
+
+  const results = parseBatchResults(response.data);
+  if (!results.length) {
+    return { error: "No batch records in response", status: 404, data: response.data };
+  }
+
+  return { batch: normalizeBatchRecord(results[0]) };
+}
+
+async function fetchBatchFromGateway({ baseUrl, batchNumber, plant, sapClient, username, password }) {
+  const urls = [
+    `${baseUrl}/BatchInfoSet?$filter=${encodeURIComponent(
+      `Charg eq '${batchNumber}' and Werks eq '${plant}'`
+    )}&$format=json&sap-client=${sapClient}`,
+    `${baseUrl}/BatchInfoSet?$filter=${encodeURIComponent(
+      `Charg eq '${batchNumber}' and Werks eq '${plant}'`
+    )}&$format=json`,
+    `${baseUrl}?$filter=${encodeURIComponent(
+      `BatchNumber eq '${batchNumber}' and Werks eq '${plant}'`
+    )}&$format=json&sap-client=${sapClient}`,
+    `${baseUrl}?$filter=${encodeURIComponent(
+      `BatchNumber eq '${batchNumber}' and Werks eq '${plant}'`
+    )}&$format=json`,
+    `${baseUrl}?$filter=${encodeURIComponent(
+      `BatchNumber eq '${batchNumber}'`
+    )}&$format=json&sap-client=${sapClient}`,
+  ];
+
+  let lastError = { error: "Batch not found", status: 404 };
+
+  for (const url of urls) {
+    const result = await requestBatchInfo(url, username, password);
+    if (result.batch) return result.batch;
+    lastError = result;
+    if (result.status && result.status !== 404) break;
+  }
+
+  throw Object.assign(new Error("Batch not found"), lastError);
 }
  
 /* =====================================================
@@ -216,41 +297,33 @@ router.get("/BatchInfoGateway/:batchNumber", async (req, res) => {
     }
  
     const { username, password } = decodeBasicAuth(authHeader);
-   
-    // Use appropriate URL based on environment
-    let url;
-    if (environment === "dev" || environment === "110") {
-      const filter = `Charg eq '${batchNumber}' and Werks eq '1134'`;
-      url = `${API_URL_DEV}/BatchInfoSet?$filter=${encodeURIComponent(filter)}&$format=json&sap-client=110`;
-    } else {
-      const filter = `Charg eq '${batchNumber}' and Werks eq '1134'`;
-      url = `${API_URL_PRD}/BatchInfoSet?$filter=${encodeURIComponent(filter)}&$format=json&sap-client=300`;
-    }
- 
-    const response = await axios.get(url, {
-      auth: { username, password },
-      headers: {
-        Accept: "application/json",
-        "X-Requested-With": "XMLHttpRequest",
-        "Accept-Encoding": SAP_ACCEPT_ENCODING,
-      },
-      httpsAgent,
-      timeout: 30000,
-      validateStatus: () => true,
+    const plant = (req.headers["x-user-plant"] || "1134").trim();
+
+    const isDev = environment === "dev" || environment === "110";
+    const sapClient = isDev ? "110" : "300";
+    const baseUrl = isDev ? API_URL_DEV : API_URL_PRD;
+
+    const batch = await fetchBatchFromGateway({
+      baseUrl,
+      batchNumber,
+      plant,
+      sapClient,
+      username,
+      password,
     });
- 
-    if (response.status >= 400) {
-      return res.status(response.status).json(response.data);
-    }
- 
-    const results = response.data?.d?.results;
-    if (!results || !results.length) {
-      return res.status(404).json({ error: "Batch not found" });
-    }
- 
-    return res.json(results[0]);
+
+    return res.set(corsHeaders).json(batch);
   } catch (err) {
     console.error("Gateway error:", err.message);
+    if (err.status === 401) {
+      return res.status(401).json({ error: "Authentication failed" });
+    }
+    if (err.status && err.status >= 400 && err.status < 500) {
+      return res.status(err.status).json({
+        error: err.message || "Batch not found",
+        details: err.error,
+      });
+    }
     return res.status(500).json({ error: "Gateway failure" });
   }
 });

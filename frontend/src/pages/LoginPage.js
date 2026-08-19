@@ -1,12 +1,12 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { loginUser } from "../api";
-import { apiEndpoints } from "../config/servers";
 
 export default function LoginPage({ onLogin }) {
   const navigate = useNavigate();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [plant, setPlant] = useState("");
   const [environment, setEnvironment] = useState("dev");
   const [error, setError] = useState("");
 
@@ -15,13 +15,14 @@ export default function LoginPage({ onLogin }) {
     setError("");
 
     try {
-      // Set client number based on environment
-      const client = environment === 'dev' ? '110' : '300';
-      const result = await loginUser(username, password, environment);
+      const client = environment === "dev" ? "110" : "300";
+      const normalizedPlant = plant.trim().toUpperCase();
+      const result = await loginUser(username, password, environment, normalizedPlant);
       onLogin({
         ...result,
         client,
-        server: environment.toUpperCase()
+        plant: normalizedPlant,
+        server: environment.toUpperCase(),
       });
     } catch (err) {
       console.error("Login page error:", err);
@@ -29,73 +30,64 @@ export default function LoginPage({ onLogin }) {
     }
   };
 
-  const handleBack = () => {
-    navigate('/splash');
-  };
-
-  const handleNext = () => {
-    // This will be handled by form submission
-    const form = document.querySelector('form');
-    if (form) {
-      form.requestSubmit();
-    }
-  };
-
   return (
     <div className="login-page">
-    <div className="login-container">
-      <h2>SAP Login</h2>
+      <div className="login-container">
+        <h2>SAP Login</h2>
 
-      <form onSubmit={handleSubmit}>
-        {/* Environment */}
-        <div className="form-group">
-          <label>Server</label>
-          <select
-            value={environment}
-            onChange={(e) => setEnvironment(e.target.value)}
-            required
-          >
-            <option value="dev">Development</option>
-            <option value="prd">Production</option>
-          </select>
-        </div>
+        <form onSubmit={handleSubmit}>
+          <div className="form-group">
+            <label>Server</label>
+            <select
+              value={environment}
+              onChange={(e) => setEnvironment(e.target.value)}
+              required
+            >
+              <option value="dev">Development</option>
+              <option value="prd">Production</option>
+            </select>
+          </div>
 
-        {/* Username */}
-        <div className="form-group">
-          <label>Username</label>
-          <input
-            type="text"
-            value={username}
-            placeholder="Enter username"
-            onChange={(e) => setUsername(e.target.value)}
-            required
-          />
-        </div>
+          <div className="form-group">
+            <label>Plant</label>
+            <input
+              type="text"
+              value={plant}
+              placeholder="Enter plant (e.g. 1134)"
+              onChange={(e) => setPlant(e.target.value.toUpperCase())}
+              required
+            />
+          </div>
 
-        {/* Password */}
-        <div className="form-group">
-          <label>Password</label>
-          <input
-            type="password"
-            value={password}
-            placeholder="Enter password"
-            onChange={(e) => setPassword(e.target.value)}
-            required
-          />
-        </div>
+          <div className="form-group">
+            <label>Username</label>
+            <input
+              type="text"
+              value={username}
+              placeholder="Enter username"
+              onChange={(e) => setUsername(e.target.value)}
+              required
+            />
+          </div>
 
-        {/* Login Button */}
-        <button type="submit" className="btn">
-          Login
-        </button>
+          <div className="form-group">
+            <label>Password</label>
+            <input
+              type="password"
+              value={password}
+              placeholder="Enter password"
+              onChange={(e) => setPassword(e.target.value)}
+              required
+            />
+          </div>
 
-        {error && <div className="error-message">{error}</div>}
-      </form>
+          <button type="submit" className="btn">
+            Login
+          </button>
+
+          {error && <div className="error-message">{error}</div>}
+        </form>
+      </div>
     </div>
-    
-    {/* Bottom Navigation Buttons */}
-
-    </div>
-
   );
 }

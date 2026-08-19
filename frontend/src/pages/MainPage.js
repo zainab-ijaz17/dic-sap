@@ -1,25 +1,32 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
+import PageHeader from "../components/PageHeader";
 
 function MainPage({ user, onLogout }) {
   const navigate = useNavigate();
   
   const navTiles = [
-    { 
-      id: "rmv", 
-      title: "CPD - Remove From Storage",
-      path: "/bsp2"
+    {
+      id: "grn",
+      title: "Goods Receipt",
+      path: "/goodreceipt"
     },
-    { 
-      id: "plc", 
-      title: "CPD - Place In Storage",
-      path: "/bsp"
+        {
+      id: "lp",
+      title: "Label Printing",
+      path: "/labelprinting"
     },
-        { 
-      id: "rpt", 
-      title: "CPD - MMBE Report",
-      path: "/inventory-report"
+        {
+      id: "put",
+      title: "Putaway",
+      path: "/putaway"
     },
+        {
+      id: "iss",
+      title: "Issuance",
+      path: "/issuance"
+    },
+
   ];
 
   const handleTileClick = (path) => {
@@ -29,19 +36,7 @@ function MainPage({ user, onLogout }) {
   return (
     <div className="app-container">
       <div className="main-content">
-        <header className="app-header">
-          <div className="user-info">
-            <div className="user-details">
-              <span className="username">{user?.username || "User"}</span>
-              <span className="server-info">
-                Server {user?.server || "DEV"} • Client {user?.client || "110"}
-              </span>
-            </div>
-            <button className="logout-btn" onClick={onLogout}>
-              Logout
-            </button>
-          </div>
-        </header>
+        <PageHeader user={user} onLogout={onLogout} />
         <section className="tiles-container">
           {navTiles.map(tile => (
             <div 

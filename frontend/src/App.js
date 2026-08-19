@@ -2,14 +2,18 @@ import React, { useState } from "react";
 import { BrowserRouter as Router, Routes, Route, Navigate, useNavigate } from "react-router-dom";
 import LoginPage from "./pages/LoginPage";
 import MainPage from "./pages/MainPage";
-import BspPage from "./pages/BspPage";
-import MigoPage from "./pages/MigoPage";
-import BspPage2 from "./pages/BspPage2";
-import MigoPage2 from "./pages/MigoPage2";
+import LabelPrintingPage from "./pages/LabelPrintingPage";
+import PutawayPage from "./pages/PutawayPage";
+import GoodReceiptPage from "./pages/GoodReceiptPage";
+import GoodReceipt2Page from "./pages/GoodReceipt2Page";
 import ScanPage from "./pages/ScanPage";
 import SplashScreen from "./pages/SplashScreen";
-import InventoryReportPage from "./pages/InventoryReportPage";
+import WarehouseReportPage from "./pages/WarehouseReportPage";
 import ReportPage from "./pages/ReportPage";
+import IssuancePage from "./pages/IssuancePage";
+import IssuancePage2 from "./pages/IssuancePage2";
+import StoreReturnPage from "./pages/StoreReturnPage";
+
 
 function SplashScreenWrapper() {
   const navigate = useNavigate();
@@ -66,21 +70,30 @@ function App() {
             }
           />
 
+            <Route
+              path="/labelprinting"
+              element={
+                <ProtectedRoute>
+                  <LabelPrintingPage user={user} onLogout={handleLogout} />
+                </ProtectedRoute>
+              }
+            />
+
+
           <Route
-            path="/bsp"
+            path="/goodreceipt"
             element={
               <ProtectedRoute>
-                <BspPage user={user} onLogout={handleLogout} />
+                <GoodReceiptPage user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />
 
-          {/* NEW ROUTE: BSP PAGE 2 */}
           <Route
-            path="/bsp2"
+            path="/goodreceipt2"
             element={
               <ProtectedRoute>
-                <BspPage2 user={user} onLogout={handleLogout} />
+                <GoodReceipt2Page user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />
@@ -95,19 +108,19 @@ function App() {
           />
 
           <Route
-            path="/migo"
+            path="/putaway"
             element={
               <ProtectedRoute>
-                <MigoPage user={user} onLogout={handleLogout} />
+                <PutawayPage user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />
 
           <Route
-            path="/inventory-report"
+            path="/warehousereport"
             element={
               <ProtectedRoute>
-                <InventoryReportPage user={user} onLogout={handleLogout} />
+                <WarehouseReportPage user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />
@@ -121,15 +134,33 @@ function App() {
             }
           />
 
-          {/* NEW ROUTE: MIGO PAGE 2 */}
-          <Route
-            path="/migo2"
-            element={
-              <ProtectedRoute>
-                <MigoPage2 user={user} onLogout={handleLogout} />
-              </ProtectedRoute>
-            }
-          />
+            <Route
+              path="/issuance"
+              element={
+                <ProtectedRoute>
+                  <IssuancePage user={user} onLogout={handleLogout} />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/issuance2"
+              element={
+                <ProtectedRoute>
+                  <IssuancePage2 user={user} onLogout={handleLogout} />
+                </ProtectedRoute>
+              }
+            />
+
+            <Route
+              path="/storereturn"
+              element={
+                <ProtectedRoute>
+                  <StoreReturnPage user={user} onLogout={handleLogout} />
+                </ProtectedRoute>
+              }
+            />
+
         </Routes>
       </div>
     </Router>

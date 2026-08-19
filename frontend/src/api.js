@@ -24,7 +24,7 @@ const loginClient = axios.create({
   withCredentials: false,
 });
 
-export const loginUser = async (username, password, environment) => {
+export const loginUser = async (username, password, environment, plant = "") => {
   try {
     const response = await loginClient.post('/Login', {
       username,
@@ -36,13 +36,14 @@ export const loginUser = async (username, password, environment) => {
 
     if (result?.E_TYPE === "S") {
       const token = btoa(`${username}:${password}`);
-      // Persist credentials for later API calls
+      const normalizedPlant = plant.trim().toUpperCase();
       localStorage.setItem('token', token);
-      localStorage.setItem('user', JSON.stringify({ username, environment }));
+      localStorage.setItem('user', JSON.stringify({ username, environment, plant: normalizedPlant }));
       return {
         success: true,
         username,
         environment,
+        plant: normalizedPlant,
         token
       };
     } else {
@@ -77,7 +78,7 @@ export const getUserCredentials = () => {
     if (!username || !password) return null;
     const userStr = localStorage.getItem('user');
     const user = userStr ? JSON.parse(userStr) : {};
-    return { username, password, environment: user.environment };
+    return { username, password, environment: user.environment, plant: user.plant };
   } catch {
     return null;
   }

@@ -11,6 +11,14 @@ const materialDocRoutes = require("./routes/materialDocRoutes");
 const materialCheckRoutes = require("./routes/materialCheckRoutes");
 const migoTransferRoutes = require("./routes/migoTransferRoutes");
 const inventoryReportRoutes = require("./routes/inventoryReportRoutes");
+const goodsReceiptRoutes = require("./routes/goodsReceiptRoutes");
+const putawayRoutes = require("./routes/putawayRoutes");
+const batchClassRoutes = require("./routes/batchClassRoutes");
+const batchInfoRoutes = require("./routes/batchInfoRoutes");
+const reservationRoutes = require("./routes/reservationRoutes");
+const materialStockRoutes = require("./routes/materialStockRoutes");
+const issuanceRoutes = require("./routes/issuanceRoutes");
+const labelPrintingRoutes = require("./routes/labelPrintingRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -24,7 +32,7 @@ app.use(
   cors({
     origin: "*",
     methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "X-User-Auth", "X-User-Environment"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-CSRF-Token", "X-User-Auth", "X-User-Environment", "X-User-Plant"],
     credentials: false
   })
 );
@@ -49,6 +57,14 @@ app.use("/api/material-doc", materialDocRoutes);
 app.use("/api/MaterialDocument", materialCheckRoutes);
 app.use("/api/migo-transfer", migoTransferRoutes);
 app.use("/api", inventoryReportRoutes);
+app.use("/api/goods-receipt", goodsReceiptRoutes);
+app.use("/api/putaway", putawayRoutes);
+app.use("/api/batch-class", batchClassRoutes);
+app.use("/api/batch-info", batchInfoRoutes);
+app.use("/api/reservation", reservationRoutes);
+app.use("/api/material-stock", materialStockRoutes);
+app.use("/api/issuance", issuanceRoutes);
+app.use("/api/label-printing", labelPrintingRoutes);
 
 /**
  * Error handling (must be last)
@@ -73,6 +89,16 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log("Material Check endpoint: POST /api/MaterialDocument/check");
   console.log("MIGO Transfer endpoint: POST /api/migo-transfer/transfer");
   console.log("Inventory Report endpoint: POST /api/inventory-report");
+  console.log("Goods Receipt Post endpoint: POST /api/goods-receipt/post");
+  console.log("Material Document Items endpoint: GET /api/goods-receipt/material-document-items");
+  console.log("Putaway endpoint: POST /api/putaway/place");
+  console.log("Batch Characteristic Value endpoint: POST /api/batch-class/assign-values");
+  console.log("Bin characteristic lookup endpoint: GET /api/batch-class/bin-lookup");
+  console.log("Batch Info lookup endpoint: GET /api/batch-info/lookup");
+  console.log("Reservation lookup endpoint: GET /api/reservation/lookup");
+  console.log("Material Stock batches endpoint: GET /api/material-stock/batches");
+  console.log("Issuance Post endpoint: POST /api/issuance/post");
+  console.log("Label Print endpoint: POST /api/label-printing/print");
 });
 
 // Utility function to log your local IP

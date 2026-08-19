@@ -4,8 +4,18 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import SplashScreen from './src/pages/SplashScreen';
 import MainPage from './src/pages/MainPage';
 import LoginPage from './src/pages/LoginPage';
-import BspPage from './src/pages/BspPage';
-import MigoPage from './src/pages/MigoPage';
+import HandlingUnitPage from './src/pages/HandlingUnitPage';
+import BinToBinPage from './src/pages/BinToBinPage';
+import GoodReceiptPage from './src/pages/GoodReceiptPage';
+import LabelPrintingPage from './src/pages/LabelPrintingPage';
+import PutawayPage from './src/pages/PutawayPage';
+import WarehouseReportPage from './src/pages/WarehouseReportPage';
+import StoreReturnPage from './src/pages/StoreReturnPage';
+import IssuancePage from './src/pages/IssuancePage';
+
+
+
+
 import './src/index.css';
 
 function App() {
@@ -37,13 +47,41 @@ function App() {
           element={user ? <MainPage user={user} onLogout={handleLogout} /> : <Navigate to="/login" />} 
         />
         <Route 
-          path="/bsp" 
-          element={user ? <BspPage user={user} /> : <Navigate to="/login" />} 
+          path="/goodreceipt" 
+          element={user ? <GoodReceiptPage user={user} /> : <Navigate to="/login" />} 
         />
         <Route 
-          path="/migo" 
-          element={user ? <MigoPage user={user} /> : <Navigate to="/login" />} 
+          path="/handlingunit" 
+          element={user ? <HandlingUnitPage user={user} /> : <Navigate to="/login" />} 
         />
+        <Route 
+          path="/labelprinting" 
+          element={user ? <LabelPrintingPage user={user} /> : <Navigate to="/login" />} 
+        />
+        <Route 
+          path="/putaway" 
+          element={user ? <PutawayPage user={user} /> : <Navigate to="/login" />} 
+        />
+
+        <Route 
+          path="/bintobin" 
+          element={user ? <BinToBinPage user={user} /> : <Navigate to="/login" />} 
+        />
+
+          <Route 
+          path="/warehousereport" 
+          element={user ? <WarehouseReportPage user={user} /> : <Navigate to="/login" />} 
+        />
+        <Route 
+          path="/storeretrun" 
+          element={user ? <StoreReturnPage user={user} /> : <Navigate to="/login" />} 
+        />
+        <Route 
+          path="/issuance" 
+          element={user ? <IssuancePage user={user} /> : <Navigate to="/login" />} 
+        />
+
+
         <Route path="/" element={<Navigate to="/login" />} />
       </Routes>
     </Router>

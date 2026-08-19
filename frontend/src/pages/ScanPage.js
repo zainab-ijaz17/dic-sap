@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { getUserCredentials } from '../api';
+import PageHeader from '../components/PageHeader';
 
 function ScanPage({ user, onLogout }) {
   const location = useLocation();
@@ -181,23 +182,9 @@ function ScanPage({ user, onLogout }) {
     });
   };
 
-  const handleLogout = () => {
-    // Logout logic if needed
-  };
-
   return (
     <div className="app-container">
-      <header className="app-header">
-        <div className="user-info">
-          <div className="user-details">
-            <span className="username">{user?.username || "s.ashraf"}</span>
-            <span className="server-info">
-              Server {user?.server || "DEV"} • Client {user?.client || "110"}
-            </span>
-          </div>
-          <button className="logout-btn" onClick={handleLogout}>Logout</button>
-        </div>
-      </header>
+      <PageHeader user={user} onLogout={onLogout} />
 
       <div style={{ maxWidth: "900px", margin: "20px auto", padding: "1rem" }}>
         <div style={{ background: "white", borderRadius: "12px", padding: "1.5rem", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}>
