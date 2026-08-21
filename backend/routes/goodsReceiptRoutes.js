@@ -15,6 +15,13 @@ const BASE_URLS = {
   prd: 'https://prdspace.prod01.apimanagement.eu10.hana.ondemand.com:443/material-document'
 };
 
+// TODO: prd host/path not confirmed yet for this API package — mirrors the
+// hostname pattern used above until SAP confirms it.
+const PO_BASE_URLS = {
+  dev: 'https://devspace.test.apimanagement.eu10.hana.ondemand.com/grp/po',
+  prd: 'https://prdspace.prod01.apimanagement.eu10.hana.ondemand.com:443/grp/po'
+};
+
 function getUserFromHeaders(req) {
   const authHeader = req.headers['x-user-auth'];
   let username, password;
@@ -209,6 +216,82 @@ router.get('/material-document-items', async (req, res) => {
 });
 
 router.options('/material-document-items', (req, res) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, X-User-Auth, X-User-Environment');
+  res.status(200).send();
+});
+
+// Looks up Purchase Order line items via C_PurchaseOrderFs (PO Fact Sheet OData
+// service) — used by GoodReceiptPage to populate Material/Quantity/UoM from a
+// scanned/typed PO number. Proxied through the backend, like every other SAP call
+// here, so a handheld device on a different network never needs direct access to
+// SAP API Management.
+router.get('/purchase-order/:poNumber', async (req, res) => {
+  try {
+    const { poNumber } = req.params;
+    if (!poNumber) {
+      return res.status(400).json({
+        error: 'Invalid request',
+        message: 'poNumber is required'
+      });
+    }
+
+    const { username, password, environment } = getUserFromHeaders(req);
+    if (!username || !password) {
+      return res.status(401).json({
+        error: 'Authentication required',
+        message: 'Valid user credentials are required'
+      });
+    }
+
+    const sapClient = environment === 'prd' ? '300' : '110';
+    const baseUrl = PO_BASE_URLS[environment];
+    const url = `${baseUrl}/C_PurchaseOrderFs('${encodeURIComponent(poNumber)}')/to_PurchaseOrderItem`;
+
+    console.log(`[${environment.toUpperCase()}] Purchase Order lookup URL:`, url);
+
+    const response = await axiosInstance.get(url, {
+      params: { 'sap-client': sapClient, '$format': 'json' },
+      auth: { username, password },
+      headers: { Accept: 'application/json' },
+      validateStatus: () => true
+    });
+
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-User-Auth, X-User-Environment');
+
+    if (response.status >= 400) {
+      const sapMessage = response.data?.error?.message;
+      const sapErrorText = typeof sapMessage === 'string' ? sapMessage : sapMessage?.value;
+      return res.status(response.status).json({
+        error: 'SAP API error',
+        message: sapErrorText || `SAP returned ${response.status}`,
+        details: response.data
+      });
+    }
+
+    const items = response.data?.d?.results || response.data?.value || [];
+    return res.status(200).json({ success: true, items });
+
+  } catch (error) {
+    console.error('Purchase Order lookup error:', error.response?.data || error.message);
+    res.header('Access-Control-Allow-Origin', '*');
+
+    if (error.response?.status === 401) {
+      return res.status(401).json({ error: 'Authentication failed', message: 'Invalid credentials for SAP system' });
+    }
+
+    return res.status(error.response?.status || 500).json({
+      error: 'Proxy server error',
+      message: error.message,
+      details: error.response?.data
+    });
+  }
+});
+
+router.options('/purchase-order/:poNumber', (req, res) => {
   res.header('Access-Control-Allow-Origin', '*');
   res.header('Access-Control-Allow-Methods', 'GET, OPTIONS');
   res.header('Access-Control-Allow-Headers', 'Content-Type, X-User-Auth, X-User-Environment');

@@ -10,12 +10,6 @@ import { getBackendBaseUrl } from "../config/servers";
 // local mock data for offline UI work — mirrors the toggle used by inventoryReportApi.js.
 const useClientMock = process.env.REACT_APP_PO_LOOKUP_MOCK === "true";
 
-// TODO: this is the devspace/test instance provided for the PO Fact Sheet lookup.
-// Confirm/replace with the correct per-environment (dev/prd) API Management host
-// once available, the same way apiEndpoints in config/servers.js does for other calls.
-const PO_API_BASE_URL = "https://devspace.test.apimanagement.eu10.hana.ondemand.com/grp/po";
-const PO_API_SAP_CLIENT = "110";
-
 const MOCK_MATERIALS = [
   { materialNumber: "MAT100234", materialDescription: "Steel Rod 12mm", uom: "KG" },
   { materialNumber: "MAT100567", materialDescription: "Aluminium Sheet 2mm", uom: "EA" },
@@ -106,15 +100,14 @@ async function fetchPurchaseOrderLive(poNumber, lineItem) {
   }
 
   const normalizedPo = normalizePoNumber(poNumber);
-  const url = `${PO_API_BASE_URL}/C_PurchaseOrderFs('${normalizedPo}')/to_PurchaseOrderItem`;
+  const url = `${getBackendBaseUrl(creds.environment)}/api/goods-receipt/purchase-order/${normalizedPo}`;
 
   let response;
   try {
     response = await axios.get(url, {
-      params: { "sap-client": PO_API_SAP_CLIENT, "$format": "json" },
       headers: {
-        Authorization: `Basic ${btoa(`${creds.username}:${creds.password}`)}`,
-        Accept: "application/json",
+        "X-User-Auth": btoa(`${creds.username}:${creds.password}`),
+        "X-User-Environment": creds.environment,
       },
       timeout: 30000,
     });
@@ -122,13 +115,22 @@ async function fetchPurchaseOrderLive(poNumber, lineItem) {
     if (err.response?.status === 401) {
       throw new Error("SAP authentication failed for the Purchase Order lookup. Please log in again.");
     }
+    const backendMessage = err.response?.data?.message;
+    if (backendMessage) {
+      throw new Error(backendMessage);
+    }
     if (!err.response) {
-      throw new Error("Unable to reach the SAP Purchase Order service (network/CORS error).");
+      throw new Error("Unable to reach the Purchase Order lookup service (network/CORS error).");
     }
     throw new Error(`Purchase Order lookup failed: ${err.response.status} ${err.response.statusText}`);
   }
 
-  const rawItems = response.data?.d?.results || response.data?.value || [];
+  const data = response.data;
+  if (!data?.success) {
+    throw new Error(data?.message || "Purchase Order lookup failed.");
+  }
+
+  const rawItems = data.items || [];
   if (!Array.isArray(rawItems) || rawItems.length === 0) {
     throw new Error(`No line items found for Purchase Order ${normalizedPo}.`);
   }
