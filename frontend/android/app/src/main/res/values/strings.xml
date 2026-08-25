@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">SAP App</string>
-    <string name="title_activity_main">SAP App</string>
+    <string name="app_name">SAP App DIC</string>
+    <string name="title_activity_main">SAP App DIC</string>
     <string name="package_name">com.packages.app</string>
     <string name="custom_url_scheme">com.packages.app</string>
 </resources>

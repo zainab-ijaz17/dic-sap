@@ -1,31 +1,17 @@
 import axios from "axios";
-
-// Use production server for login, local server for other API calls
-const LOGIN_API_BASE = "https://sap-app.cfapps.eu10-004.hana.ondemand.com/api/auth";
-const API_BASE = "https://sap-app.cfapps.eu10-004.hana.ondemand.com/api/auth";
-
-// Create axios instance for local API calls
-const apiClient = axios.create({
-  baseURL: API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  },
-  withCredentials: false, // Set to true if server supports credentials
-});
-
-// Create separate axios instance for login (production server)
-const loginClient = axios.create({
-  baseURL: LOGIN_API_BASE,
-  headers: {
-    'Content-Type': 'application/json',
-    'Accept': 'application/json',
-  },
-  withCredentials: false,
-});
+import { getBackendBaseUrl } from "./config/servers";
 
 export const loginUser = async (username, password, environment, plant = "") => {
   try {
+    const loginClient = axios.create({
+      baseURL: `${getBackendBaseUrl(environment)}/api/auth`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      withCredentials: false,
+    });
+
     const response = await loginClient.post('/Login', {
       username,
       password,
