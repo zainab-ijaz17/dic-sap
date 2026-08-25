@@ -183,12 +183,13 @@ export async function checkGoodsReceipt(payload) {
 // A PO item split into 5 pallets therefore appears 5 times in the payload. Items without
 // a resolved pallets array (defensive — GoodReceipt2Page always provides one) fall back
 // to a single line using the item's total quantity.
-function buildMaterialDocumentPayload({ poNumber, items, storageLocation, movementType, deliveryNote }) {
+function buildMaterialDocumentPayload({ poNumber, items, storageLocation, movementType, certificateEnclosed, deliveryNote }) {
   const nowMs = Date.now();
   return {
     PostingDate: `/Date(${nowMs})/`,
     DocumentDate: `/Date(${nowMs})/`,
     GoodsMovementCode: "01",
+    MaterialDocumentHeaderText: `Certificate Enclosed: ${certificateEnclosed}`,
     ReferenceDocument: deliveryNote.trim(),
     to_MaterialDocumentItem: {
       results: items.flatMap((item) => {
@@ -208,13 +209,13 @@ function buildMaterialDocumentPayload({ poNumber, items, storageLocation, moveme
   };
 }
 
-export async function postGoodsReceipt({ poNumber, items, storageLocation, movementType, deliveryNote }) {
+export async function postGoodsReceipt({ poNumber, items, storageLocation, movementType, certificateEnclosed, deliveryNote }) {
   const creds = getUserCredentials();
   if (!creds?.username || !creds?.password) {
     throw new Error("User not authenticated. Please log in again.");
   }
 
-  const payload = buildMaterialDocumentPayload({ poNumber, items, storageLocation, movementType, deliveryNote });
+  const payload = buildMaterialDocumentPayload({ poNumber, items, storageLocation, movementType, certificateEnclosed, deliveryNote });
   const url = `${getBackendBaseUrl(creds.environment)}/api/goods-receipt/post`;
 
   let response;

@@ -29,7 +29,9 @@ async function retryOnce(fn) {
 
 // Goods Receipt — Page 2: every line item forwarded from Page 1 gets its own
 // editable card (Description/UOM read-only, Quantity editable). Storage Location
-// and Movement Type are shared across all items, then Check/Post posts them together.
+// and Certificate Enclosed (Yes/No, sent as the Material Document header text) are
+// shared across all items, then Check/Post posts them together. Movement Type is no
+// longer user-editable — it's always DEFAULT_MOVEMENT_TYPE_GR.
 // checkGoodsReceipt() stays a client-side mock (A_MaterialDocumentHeader has no
 // TestRun/simulate field to validate against). postGoodsReceipt() is real — it posts
 // to API_MATERIAL_DOCUMENT_SRV via backend/routes/goodsReceiptRoutes.js.
@@ -64,7 +66,8 @@ function GoodReceipt2Page({ user, onLogout }) {
     }))
   );
   const [storageLocation, setStorageLocation] = useState(location.state?.storageLocation || "");
-  const [movementType, setMovementType] = useState(location.state?.movementType || DEFAULT_MOVEMENT_TYPE_GR);
+  const movementType = DEFAULT_MOVEMENT_TYPE_GR;
+  const [certificateEnclosed, setCertificateEnclosed] = useState(location.state?.certificateEnclosed || "No");
   const [deliveryNote, setDeliveryNote] = useState(location.state?.deliveryNote || "");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -203,7 +206,7 @@ function GoodReceipt2Page({ user, onLogout }) {
     setLoading(true);
     try {
       const itemsWithPallets = buildItemsWithPallets();
-      await checkGoodsReceipt({ poNumber, items: itemsWithPallets, storageLocation, movementType, deliveryNote });
+      await checkGoodsReceipt({ poNumber, items: itemsWithPallets, storageLocation, movementType, certificateEnclosed, deliveryNote });
       setValidationPassed(true);
       setShowSuccessPopup(true);
     } catch (err) {
@@ -222,7 +225,7 @@ function GoodReceipt2Page({ user, onLogout }) {
     let result;
     try {
       const itemsWithPallets = buildItemsWithPallets();
-      result = await postGoodsReceipt({ poNumber, items: itemsWithPallets, storageLocation, movementType, deliveryNote });
+      result = await postGoodsReceipt({ poNumber, items: itemsWithPallets, storageLocation, movementType, certificateEnclosed, deliveryNote });
     } catch (err) {
       setError(`Post failed: ${err.message || "Unknown error."}`);
       setLoading(false);
@@ -327,14 +330,16 @@ function GoodReceipt2Page({ user, onLogout }) {
             </div>
 
             <div className="form-group" style={{ flex: "1 1 0%" }}>
-              <label style={{ display: "block", marginBottom: "6px" }}>Movement Type</label>
-              <input
-                type="text"
-                value={movementType}
-                onChange={(e) => setMovementType(e.target.value)}
+              <label style={{ display: "block", marginBottom: "6px" }}>Certificate Enclosed</label>
+              <select
+                value={certificateEnclosed}
+                onChange={(e) => { setCertificateEnclosed(e.target.value); setValidationPassed(false); }}
                 className="form-control"
                 disabled={loading}
-              />
+              >
+                <option value="Yes">Yes</option>
+                <option value="No">No</option>
+              </select>
             </div>
           </div>
 
