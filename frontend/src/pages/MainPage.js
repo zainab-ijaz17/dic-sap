@@ -8,8 +8,13 @@ function MainPage({ user, onLogout }) {
   const navTiles = [
     {
       id: "grn",
-      title: "Goods Receipt",
+      title: "GR for PO",
       path: "/goodreceipt"
+    },
+        {
+      id: "grstpo",
+      title: "GR for STPO",
+      path: "/grstpo"
     },
         {
       id: "lp",
@@ -26,6 +31,7 @@ function MainPage({ user, onLogout }) {
       title: "Issuance",
       path: "/issuance"
     },
+
 
   ];
 

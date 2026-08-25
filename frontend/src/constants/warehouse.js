@@ -4,6 +4,10 @@ export const DEFAULT_MOVEMENT_TYPE_GR = "101";
 export const DEFAULT_PLANT = "1134";
 export const DEFAULT_PER_PALLET_QTY = 10;
 
+// GR for STPO (../pages/GrStpoPage.js, ../pages/GrStpo2Page.js) reads/receives stock
+// at a different plant than a regular Goods Receipt.
+export const DEFAULT_PLANT_STPO = "1312";
+
 // Issuance posting (see ../api/issuanceApi.js) — Goods Issue via a Storage Location
 // to Storage Location transfer (311). Both values are hardcoded from the single
 // sample payload given for this call; TODO: confirm whether

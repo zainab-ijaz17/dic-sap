@@ -6,6 +6,8 @@ import LabelPrintingPage from "./pages/LabelPrintingPage";
 import PutawayPage from "./pages/PutawayPage";
 import GoodReceiptPage from "./pages/GoodReceiptPage";
 import GoodReceipt2Page from "./pages/GoodReceipt2Page";
+import GrStpoPage from "./pages/GrStpoPage";
+import GrStpo2Page from "./pages/GrStpo2Page";
 import ScanPage from "./pages/ScanPage";
 import SplashScreen from "./pages/SplashScreen";
 import WarehouseReportPage from "./pages/WarehouseReportPage";
@@ -94,6 +96,24 @@ function App() {
             element={
               <ProtectedRoute>
                 <GoodReceipt2Page user={user} onLogout={handleLogout} />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/grstpo"
+            element={
+              <ProtectedRoute>
+                <GrStpoPage user={user} onLogout={handleLogout} />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/grstpo2"
+            element={
+              <ProtectedRoute>
+                <GrStpo2Page user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />
