@@ -8,6 +8,7 @@ import GoodReceiptPage from "./pages/GoodReceiptPage";
 import GoodReceipt2Page from "./pages/GoodReceipt2Page";
 import GrStpoPage from "./pages/GrStpoPage";
 import GrStpo2Page from "./pages/GrStpo2Page";
+import AddBatchCharacteristicsPage from "./pages/AddBatchCharacteristicsPage";
 import ScanPage from "./pages/ScanPage";
 import SplashScreen from "./pages/SplashScreen";
 import WarehouseReportPage from "./pages/WarehouseReportPage";
@@ -114,6 +115,15 @@ function App() {
             element={
               <ProtectedRoute>
                 <GrStpo2Page user={user} onLogout={handleLogout} />
+              </ProtectedRoute>
+            }
+          />
+
+          <Route
+            path="/add-batch-characteristics"
+            element={
+              <ProtectedRoute>
+                <AddBatchCharacteristicsPage user={user} onLogout={handleLogout} />
               </ProtectedRoute>
             }
           />

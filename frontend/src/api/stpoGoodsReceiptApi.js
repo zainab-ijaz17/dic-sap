@@ -2,12 +2,7 @@ import axios from "axios";
 import { simulateDelay, randomFromSeed } from "./mockUtils";
 import { DEFAULT_PLANT_STPO } from "../constants/warehouse";
 import { getUserCredentials } from "../api";
-
-// TODO: temporary — the backend routes these calls hit (backend/routes/
-// stpoGoodsReceiptRoutes.js) haven't been pushed to git / deployed to CF yet, so
-// point at the local backend instead of getBackendBaseUrl()'s deployed CF app.
-// Switch back to getBackendBaseUrl(creds.environment) once those routes are live.
-const STPO_BACKEND_BASE_URL = "http://localhost:3000";
+import { getBackendBaseUrl } from "../config/servers";
 
 // GR for STPO service layer. The STPO lookup and posting payload shapes are
 // placeholders pending confirmation.
@@ -106,7 +101,7 @@ async function fetchStpoLive(stpoNumber, lineItem) {
   }
 
   const normalizedStpo = normalizeStpoNumber(stpoNumber);
-  const url = `${STPO_BACKEND_BASE_URL}/api/stpo-goods-receipt/stock-transport-order/${normalizedStpo}`;
+  const url = `${getBackendBaseUrl(creds.environment)}/api/stpo-goods-receipt/stock-transport-order/${normalizedStpo}`;
 
   let response;
   try {
@@ -213,7 +208,7 @@ export async function postGrStpo({ stpoNumber, items, storageLocation, movementT
   }
 
   const payload = buildStpoMaterialDocumentPayload({ stpoNumber, items, storageLocation, movementType, deliveryNote });
-  const url = `${STPO_BACKEND_BASE_URL}/api/stpo-goods-receipt/post`;
+  const url = `${getBackendBaseUrl(creds.environment)}/api/stpo-goods-receipt/post`;
 
   let response;
   try {
@@ -252,22 +247,35 @@ export async function postGrStpo({ stpoNumber, items, storageLocation, movementT
   };
 }
 
-// SAP's exact field names for A_MaterialDocumentItem's $select list aren't
-// confirmed yet, so every field is read defensively across common naming variants,
-// same approach as mapStpoItem() above.
+// QuantityInEntryUnit/QuantityInBaseUnit were previously believed unavailable through
+// this API product — confirmed via a direct A_MaterialDocumentItem?$filter=PurchaseOrder
+// eq '...' request against https://devspace.test.apimanagement.eu10.hana.ondemand.com/material-document
+// that they ARE populated, so quantity comes from here rather than a separate
+// API_MATERIAL_STOCK_SRV lookup (see fetchStpoBatchesByMaterial() below).
 function mapMaterialDocumentItem(raw) {
+  const rawQuantity = raw.QuantityInEntryUnit ?? raw.QuantityInBaseUnit;
+  const rawUom = raw.EntryUnit || raw.MaterialBaseUnit;
   return {
     material: String(raw.Material ?? raw.Matnr ?? "").trim(),
     batch: String(raw.Batch ?? raw.Charg ?? "").trim(),
+    quantity: rawQuantity != null && rawQuantity !== "" ? Number(rawQuantity) : null,
+    uom: rawUom ? String(rawUom).trim() : null,
   };
 }
 
-// Batch for GR for STPO isn't picked by the user — it's whatever Batch was actually
-// shipped for this STPO. Looks up A_MaterialDocumentItem for the STPO (backend
-// filters to Plant 1312 + GoodsMovementType 351 — the supplying plant's
-// stock-transfer goods-issue posting — and picks the latest Material Document if
-// there's more than one) and returns a Material -> Batch map. GrStpoPage calls this
-// when the user clicks Next, so GrStpo2Page opens with Batch already known.
+// Batch for GR for STPO isn't picked by the user — it's whatever Batch(es) were
+// actually shipped for this STPO. Looks up A_MaterialDocumentItem for the STPO
+// (backend filters to Plant 1312 + GoodsMovementType 351 — the supplying plant's
+// stock-transfer goods-issue posting) to find which Batches exist for each Material —
+// a material commonly ships as several separate batches (e.g. one per pallet), so
+// every distinct Batch found for that Material is kept, not just the first. Quantity
+// comes straight off that same Material Document item (the exact amount of this Batch
+// actually posted on the goods issue) rather than the STPO line item's ordered
+// quantity, since a line item split across several batches must post each batch's
+// real quantity rather than the full ordered quantity repeated for every batch (which
+// would over-post once summed across batches). GrStpoPage calls this when the user
+// clicks Next, so GrStpo2Page opens with every shipped Batch, and its real quantity,
+// already known.
 export async function fetchStpoBatchesByMaterial(stpoNumber) {
   const creds = getUserCredentials();
   if (!creds?.username || !creds?.password) {
@@ -275,7 +283,7 @@ export async function fetchStpoBatchesByMaterial(stpoNumber) {
   }
 
   const normalizedStpo = normalizeStpoNumber(stpoNumber);
-  const url = `${STPO_BACKEND_BASE_URL}/api/stpo-goods-receipt/stpo-batches/${normalizedStpo}`;
+  const url = `${getBackendBaseUrl(creds.environment)}/api/stpo-goods-receipt/stpo-batches/${normalizedStpo}`;
 
   let response;
   try {
@@ -311,11 +319,22 @@ export async function fetchStpoBatchesByMaterial(stpoNumber) {
     console.debug("STPO existing-batches raw item shape (first result):", rawItems[0]);
   }
 
+  const materialBatchPairs = [];
+  const seenPairs = new Set();
+  rawItems.map(mapMaterialDocumentItem).forEach(({ material, batch, quantity, uom }) => {
+    if (!material || !batch) return;
+    const key = `${material}|${batch}`;
+    if (seenPairs.has(key)) return;
+    seenPairs.add(key);
+    materialBatchPairs.push({ material, batch, quantity, uom });
+  });
+
   const batchesByMaterial = {};
-  rawItems.map(mapMaterialDocumentItem).forEach(({ material, batch }) => {
-    if (material && batch && !batchesByMaterial[material]) {
-      batchesByMaterial[material] = batch;
+  materialBatchPairs.forEach(({ material, batch, quantity, uom }) => {
+    if (!batchesByMaterial[material]) {
+      batchesByMaterial[material] = [];
     }
+    batchesByMaterial[material].push({ batch, quantity, uom });
   });
 
   return batchesByMaterial;

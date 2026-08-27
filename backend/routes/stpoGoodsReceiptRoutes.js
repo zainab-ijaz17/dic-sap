@@ -57,7 +57,12 @@ function extractDocumentNumber(sapData) {
 // shipped for this STPO, discoverable from the Material Document trail: Plant 1312 +
 // GoodsMovementType 351 is the stock-transfer goods-issue posting at the supplying
 // plant. A STPO can have more than one such posting (partial deliveries), so only
-// the latest Material Document's Batches are current.
+// the latest Material Document's Batches are current — picking the highest
+// MaterialDocumentYear/MaterialDocument naturally supersedes an earlier posting that
+// was later reversed (movement 352) once a corrected 351 is posted, without needing to
+// inspect GoodsMovementIsCancelled: a still-cancelled-with-no-resend 351 is exactly
+// the "latest" available data, and its Batch/Quantity are what's shown until SAP has
+// something newer.
 const STPO_BATCH_PLANT = '1312';
 const STPO_BATCH_MOVEMENT_TYPE = '351';
 
@@ -85,7 +90,15 @@ router.get('/stpo-batches/:stpoNumber', async (req, res) => {
 
     const baseUrl = BASE_URLS[environment];
     const filter = `PurchaseOrder eq '${stpoNumber}'`;
-    const select = 'Material,Batch,MaterialDocumentYear,MaterialDocument,MaterialDocumentItem,GoodsMovementType,Plant';
+    // Quantity was previously believed unavailable here — testing directly against the
+    // SAP backend (bypassing this app's API Management proxy) confirmed
+    // QuantityInBaseUnit/QuantityInEntryUnit ARE populated on A_MaterialDocumentItem.
+    // Requesting them here lets fetchStpoBatchesByMaterial() (frontend/src/api/stpoGoodsReceiptApi.js)
+    // use the exact quantity actually posted for each Batch instead of a separate
+    // API_MATERIAL_STOCK_SRV lookup. TODO: if this app's API Management "material-document"
+    // product still strips these fields (as it previously did even with $select omitted),
+    // they'll simply come back empty and the frontend falls back to fetchBatchQuantity().
+    const select = 'Material,Batch,MaterialDocumentYear,MaterialDocument,MaterialDocumentItem,GoodsMovementType,Plant,GoodsMovementIsCancelled,MaterialBaseUnit,QuantityInBaseUnit,EntryUnit,QuantityInEntryUnit';
     const url = `${baseUrl}/A_MaterialDocumentItem?$filter=${encodeURIComponent(filter)}&$select=${select}&$format=json`;
 
     console.log(`[${environment.toUpperCase()}] STPO existing-batches lookup URL:`, url);

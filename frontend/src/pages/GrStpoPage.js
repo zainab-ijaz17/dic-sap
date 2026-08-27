@@ -12,10 +12,15 @@ import { fetchStpo, fetchStpoBatchesByMaterial } from "../api/stpoGoodsReceiptAp
 // to Page 2. If the user navigates Back from Page 2, prefillStpoNumber/prefillLineItems
 // restore what was already fetched here instead of resetting to a blank form.
 //
-// Clicking Next also looks up the Batch actually shipped for this STPO (Batch isn't
-// picked by the user for GR for STPO — see fetchStpoBatchesByMaterial() in
-// ../api/stpoGoodsReceiptApi.js) and stamps it onto each line item before handing
-// off to GrStpo2Page, so Page 2 opens with Batch already known.
+// Fetch itself already looks up the Batch(es) actually shipped for this STPO
+// (fetchStpoBatchesByMaterial() in ../api/stpoGoodsReceiptApi.js) and shows each line
+// item's Quantity as the sum of what was actually shipped across those batches —
+// never the STPO line item's ordered quantity — since what was ordered can overstate
+// what's actually available to receive. Clicking Next re-fetches the same batch data
+// and expands each line item into one row per Batch found for that Material — a
+// Material commonly ships as several batches — before handing off to GrStpo2Page,
+// with each row's own quantity/uom from that specific Batch (so posting several
+// batches for one material doesn't re-post the same total for every batch).
 function GrStpoPage({ user, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -40,7 +45,13 @@ function GrStpoPage({ user, onLogout }) {
     setLoading(true);
     try {
       const result = await fetchStpo(stpoNumber, lineItem);
-      setLineItems(result.lineItems || []);
+      const batchesByMaterial = await fetchStpoBatchesByMaterial(stpoNumber);
+      const lineItemsWithShippedQty = (result.lineItems || []).map((item) => {
+        const batches = batchesByMaterial[item.materialNumber] || [];
+        const shippedQty = batches.reduce((sum, b) => sum + (Number(b.quantity) || 0), 0);
+        return { ...item, quantity: shippedQty, uom: batches[0]?.uom || item.uom };
+      });
+      setLineItems(lineItemsWithShippedQty);
     } catch (err) {
       setError(err.message || "Failed to fetch STPO.");
     } finally {
@@ -58,10 +69,16 @@ function GrStpoPage({ user, onLogout }) {
     setLoading(true);
     try {
       const batchesByMaterial = await fetchStpoBatchesByMaterial(stpoNumber);
-      const lineItemsWithBatch = lineItems.map((item) => ({
-        ...item,
-        batch: batchesByMaterial[item.materialNumber] || "",
-      }));
+      const lineItemsWithBatch = lineItems.flatMap((item) => {
+        const batches = batchesByMaterial[item.materialNumber] || [];
+        if (batches.length === 0) return [{ ...item, batch: "" }];
+        return batches.map(({ batch, quantity, uom }) => ({
+          ...item,
+          batch,
+          quantity: quantity || item.quantity,
+          uom: uom || item.uom,
+        }));
+      });
       navigate("/grstpo2", {
         state: { stpoNumber: stpoNumber.trim().toUpperCase(), lineItems: lineItemsWithBatch },
       });

@@ -30,10 +30,14 @@ export function emptyBatchCharacteristicValues() {
   return BATCH_CHARACTERISTICS.reduce((acc, charc) => ({ ...acc, [charc.key]: "" }), {});
 }
 
-// Bin, assigned during Putaway (../pages/PutawayPage.js) rather than at GR time — kept
-// separate from BATCH_CHARACTERISTICS so it doesn't show up on GoodReceipt2Page's
-// per-item characteristics grid. "char" is a starting guess (the sample payload we were
-// given reused a placeholder date value from an earlier characteristic's example, and a
-// Bin is a location code, not a date) — confirm against a live SAP response the same way
-// 3935/3936 got corrected above, and fix here if SAP disagrees.
+// Bin. Defaulted to "floor" for every batch at GR time (GoodReceipt2Page.js and
+// GrStpo2Page.js — newly received stock lives on the floor until it's actually put
+// away) and later overwritten with the real Bin during Putaway (../pages/PutawayPage.js).
+// Kept separate from BATCH_CHARACTERISTICS so it doesn't show up as a user-editable
+// field on GoodReceipt2Page's per-item characteristics grid — both GR's "floor"
+// default and Putaway's real value are assigned programmatically, never typed in by
+// the user at GR time. "char" is a starting guess (the sample payload we were given
+// reused a placeholder date value from an earlier characteristic's example, and a
+// Bin is a location code, not a date) — confirm against a live SAP response the same
+// way 3935/3936 got corrected above, and fix here if SAP disagrees.
 export const BIN_CHARACTERISTIC = { id: "3942", key: "bin", label: "Bin", type: "char" };

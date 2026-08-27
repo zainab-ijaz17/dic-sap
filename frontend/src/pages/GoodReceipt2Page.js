@@ -2,10 +2,11 @@ import React, { useEffect, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import LoadingButton from "../components/LoadingButton";
+import BatchClassificationFailurePopup from "../components/BatchClassificationFailurePopup";
 import { checkGoodsReceipt, postGoodsReceipt, fetchMaterialDocumentItems, matchBatchesToItems } from "../api/goodsReceiptApi";
 import { postBatchCharacteristics } from "../api/batchClassApi";
 import { DEFAULT_MOVEMENT_TYPE_GR } from "../constants/warehouse";
-import { BATCH_CHARACTERISTICS, emptyBatchCharacteristicValues } from "../constants/batchClass";
+import { BATCH_CHARACTERISTICS, BIN_CHARACTERISTIC, emptyBatchCharacteristicValues } from "../constants/batchClass";
 import {
   computeStandardizedPalletQuantities,
   resizeCustomQuantities,
@@ -48,7 +49,9 @@ async function retryOnce(fn) {
 // until a Batch exists — Batch is SAP-assigned only once the GR is posted. So Post
 // does three things in sequence: post the GR, fetch the Batch(es) SAP just assigned
 // (fetchMaterialDocumentItems + matchBatchesToItems, ../api/goodsReceiptApi.js), then
-// fire the batch-class API calls (../api/batchClassApi.js) for whatever the user filled in.
+// fire the batch-class API calls (../api/batchClassApi.js) for every batch — Bin is
+// always defaulted to "floor" regardless of what the user filled in, merged into the
+// same call as whichever BATCH_CHARACTERISTICS fields were actually filled in.
 function GoodReceipt2Page({ user, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -77,6 +80,8 @@ function GoodReceipt2Page({ user, onLogout }) {
   const [postSuccessData, setPostSuccessData] = useState(null);
   const [progress, setProgress] = useState("");
   const [batchWarning, setBatchWarning] = useState("");
+  const [classificationFailures, setClassificationFailures] = useState([]);
+  const [showBatchFailurePopup, setShowBatchFailurePopup] = useState(false);
 
   useEffect(() => {
     if (!location.state?.lineItems?.length) {
@@ -239,58 +244,64 @@ function GoodReceipt2Page({ user, onLogout }) {
     setPostSuccessData({ materialDocNumber: result.materialDocNumber, message: result.message });
     setShowPostSuccessPopup(true);
 
-    const anyCharcFilled = items.some((item) =>
-      BATCH_CHARACTERISTICS.some((charc) => String(item.batchCharacteristics?.[charc.key] ?? "").trim() !== "")
-    );
-    if (!anyCharcFilled) {
-      setLoading(false);
-      return;
-    }
-
     try {
       setProgress("Fetching Batch from the posted Material Document…");
       const docItems = await retryOnce(() => fetchMaterialDocumentItems(result.materialDocNumber, result.materialDocYear));
       const itemsWithBatches = matchBatchesToItems(items, docItems);
       setItems(itemsWithBatches);
 
+      // Every batch created at GR runs through classification, whether or not the
+      // user filled in any BATCH_CHARACTERISTICS field — Bin defaults to "floor" for
+      // every batch unconditionally (newly received stock lives on the floor until
+      // Putaway, ../pages/PutawayPage.js, assigns a real Bin).
       const classificationTasks = [];
       itemsWithBatches.forEach((item) => {
-        const hasCharcValue = BATCH_CHARACTERISTICS.some(
-          (charc) => String(item.batchCharacteristics?.[charc.key] ?? "").trim() !== ""
-        );
-        if (!hasCharcValue) return;
         const batches = item.batches?.length > 0 ? item.batches : item.batch ? [item.batch] : [];
         batches.forEach((batch) => classificationTasks.push({ item, batch }));
       });
 
       if (classificationTasks.length === 0) {
-        setBatchWarning("No Batch was found on the posted Material Document, so batch characteristics were not assigned.");
+        setBatchWarning("No Batch was found on the posted Material Document, so batch characteristics (incl. Bin) were not assigned.");
         return;
       }
 
       // Different batches are independent SAP lock objects (the enqueue lock that
       // forces sequential writes within one batch — see backend/routes/batchClassRoutes.js
       // — is scoped to that specific Material+Batch), so batches can be classified in
-      // parallel even though each batch's own characteristics can't be.
+      // parallel even though each batch's own characteristics can't be. Bin is merged
+      // into the same assign-values call as whatever BATCH_CHARACTERISTICS the user
+      // filled in, so each batch gets exactly one request rather than two.
       let completed = 0;
       setProgress(`Assigning batch characteristics… (0 of ${classificationTasks.length} batches)`);
       const classificationResults = await Promise.allSettled(
         classificationTasks.map(({ item, batch }) =>
-          retryOnce(() => postBatchCharacteristics({ material: item.materialNumber, batch, values: item.batchCharacteristics })).finally(() => {
+          retryOnce(() =>
+            postBatchCharacteristics({
+              material: item.materialNumber,
+              batch,
+              values: { ...item.batchCharacteristics, bin: "floor" },
+              characteristics: [...BATCH_CHARACTERISTICS, BIN_CHARACTERISTIC],
+            })
+          ).finally(() => {
             completed += 1;
             setProgress(`Assigning batch characteristics… (${completed} of ${classificationTasks.length} batches)`);
           })
         )
       );
 
-      const failures = classificationResults
-        .map((settled, i) => ({ settled, batch: classificationTasks[i].batch }))
+      const failedTasks = classificationResults
+        .map((settled, i) => ({ settled, task: classificationTasks[i] }))
         .filter(({ settled }) => settled.status === "rejected");
 
-      if (failures.length > 0) {
-        setBatchWarning(
-          failures.map(({ settled, batch }) => `Batch ${batch}: ${settled.reason?.message || "Unknown error."}`).join(" | ")
+      if (failedTasks.length > 0) {
+        setClassificationFailures(
+          failedTasks.map(({ task }) => ({
+            materialNumber: task.item.materialNumber,
+            materialDescription: task.item.materialDescription,
+            batch: task.batch,
+          }))
         );
+        setShowBatchFailurePopup(true);
       } else {
         setPostSuccessData((prev) => ({ ...prev, classificationApplied: true }));
       }
@@ -624,6 +635,13 @@ function GoodReceipt2Page({ user, onLogout }) {
             </div>
           </div>
         </div>
+      )}
+
+      {showBatchFailurePopup && (
+        <BatchClassificationFailurePopup
+          failures={classificationFailures}
+          onClose={() => setShowBatchFailurePopup(false)}
+        />
       )}
     </div>
   );

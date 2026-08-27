@@ -138,7 +138,15 @@ async function fetchPurchaseOrderLive(poNumber, lineItem) {
   // eslint-disable-next-line no-console
   console.debug("PO lookup raw item shape (first result):", rawItems[0]);
 
-  let lineItems = rawItems.map(mapPurchaseOrderItem);
+  // Items marked for deletion (PurchasingDocumentDeletionCode "L") can't be goods-
+  // receipted — SAP would reject a posting against them — so they're dropped here,
+  // before mapping, rather than shown on GoodReceiptPage and forwarded to GoodReceipt2Page.
+  const activeRawItems = rawItems.filter((item) => item.PurchasingDocumentDeletionCode !== "L");
+  if (activeRawItems.length === 0) {
+    throw new Error(`All line items on Purchase Order ${normalizedPo} are marked for deletion.`);
+  }
+
+  let lineItems = activeRawItems.map(mapPurchaseOrderItem);
 
   const trimmedLineItem = (lineItem || "").trim();
   if (trimmedLineItem) {

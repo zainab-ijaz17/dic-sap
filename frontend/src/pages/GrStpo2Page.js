@@ -3,16 +3,35 @@ import { useLocation, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import LoadingButton from "../components/LoadingButton";
 import { checkGrStpo, postGrStpo } from "../api/stpoGoodsReceiptApi";
+import { postBatchCharacteristics, fetchBin } from "../api/batchClassApi";
+import { BIN_CHARACTERISTIC } from "../constants/batchClass";
 import { DEFAULT_MOVEMENT_TYPE_GR } from "../constants/warehouse";
+
+// Assigning Bin right after posting hits SAP again immediately on the heels of a
+// live post, so a transient failure there (network blip, momentary lock contention)
+// shouldn't immediately surface as a failure — retry once before giving up. Mirrors
+// retryOnce() in GoodReceipt2Page.js.
+async function retryOnce(fn) {
+  try {
+    return await fn();
+  } catch {
+    return await fn();
+  }
+}
 
 // GR for STPO — Page 2: Storage Location/Movement Type/Delivery Note on top, then a
 // scan-and-match step modeled on ScanPage.js instead of per-item quantity/batch
-// editing. The line items forwarded from GrStpoPage.js already carry the Batch that
-// was actually shipped for this STPO (fetchStpoBatchesByMaterial(), called when the
-// user clicked Next on Page 1 — see ../api/stpoGoodsReceiptApi.js); scanning here is
+// editing. The line items forwarded from GrStpoPage.js are already expanded to one
+// row per Batch actually shipped for this STPO (fetchStpoBatchesByMaterial(), called
+// when the user clicked Next on Page 1 — see ../api/stpoGoodsReceiptApi.js) — a
+// Material with 3 shipped batches arrives here as 3 rows, one per Batch; scanning is
 // just physically confirming which of those Batches are present before posting.
 // Only matched line items get sent to Check/Post — an item whose Batch was never
 // scanned doesn't get received.
+//
+// Unlike GoodReceipt2Page.js, Batch is already known here before posting (it's the
+// Batch that was actually shipped, not SAP-assigned at GR time), so Post can assign
+// Bin = "floor" to every matched Batch directly, without a fetch-Batch-back step.
 function GrStpo2Page({ user, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -28,6 +47,8 @@ function GrStpo2Page({ user, onLogout }) {
   const [showSuccessPopup, setShowSuccessPopup] = useState(false);
   const [showPostSuccessPopup, setShowPostSuccessPopup] = useState(false);
   const [postSuccessData, setPostSuccessData] = useState(null);
+  const [progress, setProgress] = useState("");
+  const [batchWarning, setBatchWarning] = useState("");
 
   const [scannedBatch, setScannedBatch] = useState("");
   const [matchedBatches, setMatchedBatches] = useState([]); // { ...item, isMatched, scannedBatch }
@@ -171,17 +192,74 @@ function GrStpo2Page({ user, onLogout }) {
 
   const handlePost = async () => {
     setError("");
+    setBatchWarning("");
     setLoading(true);
+
+    const matchedItems = matchedBatches.filter((b) => b.isMatched);
+    let result;
     try {
-      const matchedItems = matchedBatches.filter((b) => b.isMatched);
-      const result = await postGrStpo({ stpoNumber, items: matchedItems, storageLocation, movementType, deliveryNote });
-      setShowSuccessPopup(false);
-      setPostSuccessData({ materialDocNumber: result.materialDocNumber, message: result.message });
-      setShowPostSuccessPopup(true);
+      result = await postGrStpo({ stpoNumber, items: matchedItems, storageLocation, movementType, deliveryNote });
     } catch (err) {
       setError(`Post failed: ${err.message || "Unknown error."}`);
+      setLoading(false);
+      return;
+    }
+
+    // The GR is posted at this point — anything past here (assigning Bin) must never
+    // be reported as "Post failed", since that would wrongly suggest no Material
+    // Document was created and risk a duplicate post.
+    setShowSuccessPopup(false);
+    setPostSuccessData({ materialDocNumber: result.materialDocNumber, message: result.message });
+    setShowPostSuccessPopup(true);
+
+    try {
+      // Every matched Batch gets Bin defaulted to "floor" — newly received stock
+      // lives on the floor until Putaway (../pages/PutawayPage.js) assigns a real
+      // Bin. But a Batch coming through GR for STPO may already carry a Bin value
+      // (e.g. it was received before) — fetch it first: if it's already "floor",
+      // skip the write entirely; otherwise assign "floor" as usual (postBatchCharacteristics
+      // → backend/routes/batchClassRoutes.js already falls back from create to a PATCH
+      // update on its own when a value already exists, so no other value needs special
+      // handling here). Independent batches are independent SAP lock objects, so this
+      // runs in parallel — see the matching comment in GoodReceipt2Page.js.
+      let completed = 0;
+      setProgress(`Assigning Bin… (0 of ${matchedItems.length} batches)`);
+      const binResults = await Promise.allSettled(
+        matchedItems.map((item) =>
+          retryOnce(async () => {
+            const currentBin = await fetchBin(item.materialNumber, item.batch);
+            if (currentBin.trim().toLowerCase() === "floor") {
+              return { skipped: true };
+            }
+            return postBatchCharacteristics({
+              material: item.materialNumber,
+              batch: item.batch,
+              values: { bin: "floor" },
+              characteristics: [BIN_CHARACTERISTIC],
+            });
+          }).finally(() => {
+            completed += 1;
+            setProgress(`Assigning Bin… (${completed} of ${matchedItems.length} batches)`);
+          })
+        )
+      );
+
+      const failures = binResults
+        .map((settled, i) => ({ settled, batch: matchedItems[i].batch }))
+        .filter(({ settled }) => settled.status === "rejected");
+
+      if (failures.length > 0) {
+        setBatchWarning(
+          failures.map(({ settled, batch }) => `Batch ${batch}: ${settled.reason?.message || "Unknown error."}`).join(" | ")
+        );
+      } else {
+        setPostSuccessData((prev) => ({ ...prev, classificationApplied: true }));
+      }
+    } catch (err) {
+      setBatchWarning(err.message || "Failed to assign Bin after posting.");
     } finally {
       setLoading(false);
+      setProgress("");
     }
   };
 
@@ -582,6 +660,18 @@ function GrStpo2Page({ user, onLogout }) {
                 <div style={{ marginTop: "0.75rem", color: "#374151" }}>{postSuccessData.message}</div>
               )}
             </div>
+
+            {progress && (
+              <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.85rem" }}>{progress}</div>
+            )}
+            {batchWarning && (
+              <div className="error" style={{ marginTop: "0.75rem" }}>{batchWarning}</div>
+            )}
+            {!progress && !batchWarning && postSuccessData?.classificationApplied && (
+              <div style={{ background: "#dcfce7", color: "#166534", padding: "0.6rem", borderRadius: "8px", marginTop: "0.75rem" }}>
+                Bin assigned successfully.
+              </div>
+            )}
 
             <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.25rem" }}>
               <LoadingButton onClick={() => navigate("/main")} disabled={loading}>Done</LoadingButton>
