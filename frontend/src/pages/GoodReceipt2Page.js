@@ -241,7 +241,7 @@ function GoodReceipt2Page({ user, onLogout }) {
     // characteristics) must never be reported as "Post failed", since that would wrongly
     // suggest no Material Document was created and risk a duplicate post.
     setShowSuccessPopup(false);
-    setPostSuccessData({ materialDocNumber: result.materialDocNumber, message: result.message });
+    setPostSuccessData({ materialDocNumber: result.materialDocNumber, materialDocYear: result.materialDocYear, message: result.message });
     setShowPostSuccessPopup(true);
 
     try {
@@ -630,7 +630,21 @@ function GoodReceipt2Page({ user, onLogout }) {
               </div>
             )}
 
-            <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.25rem" }}>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.25rem" }}>
+              <LoadingButton
+                onClick={() =>
+                  navigate("/labelprinting", {
+                    state: {
+                      materialDocNumber: postSuccessData?.materialDocNumber,
+                      materialDocYear: postSuccessData?.materialDocYear,
+                    },
+                  })
+                }
+                variant="neutral"
+                disabled={loading || !postSuccessData?.materialDocNumber}
+              >
+                Print Label
+              </LoadingButton>
               <LoadingButton onClick={() => navigate("/main")} disabled={loading}>Done</LoadingButton>
             </div>
           </div>

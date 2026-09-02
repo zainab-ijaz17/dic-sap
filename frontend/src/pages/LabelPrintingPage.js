@@ -1,26 +1,13 @@
-import React, { useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import LoadingButton from "../components/LoadingButton";
 import BarcodeInput from "../components/BarcodeInput";
 import BarcodeDisplay from "../components/BarcodeDisplay";
-import { fetchBatchInfo, fetchBatchDocumentInfo } from "../api/batchInfoApi";
-import { fetchBatchQuantity } from "../api/materialStockApi";
 import { fetchPurchaseOrder, fetchMaterialDocumentItems } from "../api/goodsReceiptApi";
 import { printLabel, reprintLabel } from "../api/labelPrintingApi";
-import { BATCH_BARCODE_MAX_LENGTH } from "../constants/barcode";
-import { validateBarcode } from "../utils/barcodeValidation";
 import { splitMaterialDescription } from "../utils/materialDescription";
 
-// Label Printing — scan (or type) a Batch, look up its Material/Description
-// (../api/batchInfoApi.js), current stock Quantity (../api/materialStockApi.js), and
-// the Purchase Order/Material Document it was received against (../api/batchInfoApi.js's
-// fetchBatchDocumentInfo, plus ../api/goodsReceiptApi.js's fetchPurchaseOrder for the
-// description), then print a label carrying all of it plus a Code128 barcode of the
-// Batch — see buildZplLabel in ../api/labelPrintingApi.js for the actual label layout.
-// Printing sends the ZPL to a network Zebra printer via
-// backend/routes/labelPrintingRoutes.js; set LABEL_PRINTER_HOST_DEV/PRD in
-// backend/.env to the real printer IP once known.
 function normalizeKey(value) {
   return String(value ?? "").trim();
 }
@@ -40,147 +27,209 @@ function LabelField({ heading, value }) {
   );
 }
 
+// Label Printing — enter a Material Document Number (+ Year), fetch every line SAP
+// posted against it via API_MATERIAL_DOCUMENT_SRV (fetchMaterialDocumentItems,
+// ../api/goodsReceiptApi.js — the same call GoodReceipt2Page.js already relies on to
+// find the Batch(es) it just created), and build one label per distinct Batch found.
+// One PO line item commonly posts as several such lines, one per pallet, with SAP
+// assigning either a shared Batch across all of them or a separate Batch per line
+// depending on batch determination config — so a 10-pallet receipt typically means 10
+// Batches, i.e. 10 labels here.
+//
+// A_MaterialDocumentItem has no Material Description field at all, so it's fetched
+// once per distinct Purchase Order/Item via the PO Fact Sheet (fetchPurchaseOrder,
+// already confirmed working via GoodReceiptPage.js) and reused across every Batch
+// that shares it, rather than once per Batch.
+//
+// Reachable either by entering a Material Document Number directly, or via the
+// "Print Label" button on GoodReceipt2Page.js's post-success popup, which routes here
+// with { materialDocNumber, materialDocYear } already known.
 function LabelPrintingPage({ user, onLogout }) {
+  const location = useLocation();
   const navigate = useNavigate();
-  const batchInputRef = useRef(null);
 
-  const [batch, setBatch] = useState("");
-  const [label, setLabel] = useState(null);
+  const [materialDocNumber, setMaterialDocNumber] = useState(location.state?.materialDocNumber || "");
+  const [materialDocYear, setMaterialDocYear] = useState(
+    location.state?.materialDocYear || String(new Date().getFullYear())
+  );
+  const [labels, setLabels] = useState([]);
+  const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [printing, setPrinting] = useState(false);
+  const [printingIndex, setPrintingIndex] = useState(null);
+  const [printingAll, setPrintingAll] = useState(false);
+  const [printAllProgress, setPrintAllProgress] = useState("");
   const [error, setError] = useState("");
 
-  const fetchLabelData = async (batchValue) => {
+  const fetchLabels = async (docNumber, docYear) => {
+    const trimmedDocNumber = docNumber.trim();
+    const trimmedDocYear = docYear.trim();
+    if (!trimmedDocNumber || !trimmedDocYear) {
+      setError("Please enter both Material Document Number and Year.");
+      return;
+    }
+
     setError("");
     setLoading(true);
+    setLabels([]);
     try {
-      const info = await fetchBatchInfo(batchValue);
-      // Both lookups are scoped with Material/Plant (info.material/info.plant) on top
-      // of Batch — Batch numbers aren't guaranteed unique across Materials or Plants,
-      // so without this a same-numbered batch elsewhere could get silently summed
-      // into the quantity or swap in an unrelated PO/Material Document.
-      const [stock, docInfo] = await Promise.all([
-        fetchBatchQuantity(info.material, batchValue, info.plant),
-        fetchBatchDocumentInfo(batchValue, info.material),
-      ]);
-
-      // API_BATCH_SRV/Batch's MaterialDescription (info.materialDescription) comes
-      // back blank in practice, so fall back to the Purchase Order Fact Sheet's item
-      // text for the PO/Item this batch was received against — the same lookup
-      // GoodReceiptPage.js already relies on (fetchPurchaseOrder, ../api/goodsReceiptApi.js)
-      // and confirmed working there. Only attempted when a PO/Item is on record; a
-      // failure here (or no PO/Item at all) just leaves whatever API_BATCH_SRV returned.
-      let materialDescription = info.materialDescription;
-      if (docInfo.purchaseOrder && docInfo.purchaseOrderItem) {
-        try {
-          const po = await fetchPurchaseOrder(docInfo.purchaseOrder, docInfo.purchaseOrderItem);
-          materialDescription = po.lineItems[0]?.materialDescription || materialDescription;
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.debug("Purchase Order Fact Sheet description lookup failed, keeping API_BATCH_SRV value:", err.message);
-        }
+      const rawItems = await fetchMaterialDocumentItems(trimmedDocNumber, trimmedDocYear);
+      const batchItems = rawItems.filter((item) => normalizeKey(item.Batch));
+      if (batchItems.length === 0) {
+        throw new Error(`No Batch was found on Material Document ${trimmedDocNumber}/${trimmedDocYear}.`);
       }
 
-      // Pallet Qty: one PO line item can post as several to_MaterialDocumentItem
-      // lines, one per pallet, with SAP assigning either a shared Batch across every
-      // pallet-line or a separate Batch per line depending on batch determination
-      // config (see matchBatchesToItems in ../api/goodsReceiptApi.js, which handles
-      // the exact same grouping for GoodReceipt2Page). Pallet Qty sums the Quantity of
-      // every pallet-line sharing this batch's PurchaseOrderItem within the same
-      // Material Document — i.e. the total received across the whole pallet group
-      // this batch is part of, not just this one batch's own share (that's Qty above).
-      let palletQuantity = null;
-      if (docInfo.materialDocument && docInfo.materialDocumentYear) {
-        try {
-          const docItems = await fetchMaterialDocumentItems(docInfo.materialDocument, docInfo.materialDocumentYear);
-          let matches = docInfo.purchaseOrderItem
-            ? docItems.filter((d) => normalizeKey(d.PurchaseOrderItem) === normalizeKey(docInfo.purchaseOrderItem))
-            : [];
-          if (matches.length === 0) {
-            matches = docItems.filter((d) => normalizeMaterial(d.Material) === normalizeMaterial(info.material));
-          }
-          palletQuantity = matches.reduce(
-            (sum, d) => sum + Number(d.QuantityInEntryUnit ?? d.QuantityInBaseUnit ?? 0),
-            0
-          );
-        } catch (err) {
-          // eslint-disable-next-line no-console
-          console.debug("Pallet Qty lookup failed, leaving it blank:", err.message);
-        }
-      }
-
-      // Plant/Storage Location: prefer the batch's current stock location
-      // (fetchBatchQuantity), falling back to where the Material Document posted it
-      // and then to API_BATCH_SRV's BatchIdentifyingPlant, in case any one source
-      // comes back blank.
-      const plant = stock.plant || docInfo.plant || info.plant || "";
-      const storageLocation = stock.storageLocation || docInfo.storageLocation || "";
-      setLabel({
-        materialNumber: info.material,
-        materialDescription,
-        batch: batchValue,
-        quantity: stock.quantity,
-        uom: stock.uom,
-        palletQuantity,
-        purchaseOrder: docInfo.purchaseOrder,
-        purchaseOrderItem: docInfo.purchaseOrderItem,
-        materialDocument: docInfo.materialDocument,
-        location: plant && storageLocation ? `${plant}/${storageLocation}` : (plant || storageLocation || ""),
-        printCount: 0,
-        printedAt: null,
+      // Pallet Qty groups every line by PurchaseOrderItem across the WHOLE document,
+      // regardless of which Batch it ended up under — mirrors how GoodReceipt2Page
+      // posts one PO line item as several pallet-lines (buildMaterialDocumentPayload,
+      // ../api/goodsReceiptApi.js). Falls back to grouping by Material when
+      // PurchaseOrderItem isn't present on the returned doc items.
+      const palletQtyByKey = new Map();
+      batchItems.forEach((item) => {
+        const key = normalizeKey(item.PurchaseOrderItem) || `material:${normalizeMaterial(item.Material)}`;
+        const qty = Number(item.QuantityInEntryUnit ?? item.QuantityInBaseUnit ?? 0);
+        palletQtyByKey.set(key, (palletQtyByKey.get(key) || 0) + qty);
       });
+
+      // Group lines by Batch — each distinct Batch becomes its own label. A Batch can
+      // span more than one line (shared-Batch-across-pallets config), so its own Qty
+      // sums every line under it rather than assuming exactly one line per Batch.
+      const itemsByBatch = new Map();
+      batchItems.forEach((item) => {
+        const batch = normalizeKey(item.Batch);
+        if (!itemsByBatch.has(batch)) itemsByBatch.set(batch, []);
+        itemsByBatch.get(batch).push(item);
+      });
+
+      const descriptionByPoItem = new Map();
+      const builtLabels = [];
+      for (const [batch, group] of itemsByBatch) {
+        const first = group[0];
+        const material = String(first.Material ?? "").trim();
+        const purchaseOrder = String(first.PurchaseOrder ?? "").trim();
+        const purchaseOrderItem = String(first.PurchaseOrderItem ?? "").trim();
+        const plant = String(first.Plant ?? "").trim();
+        const storageLocation = String(first.StorageLocation ?? "").trim();
+        const uom = String(first.EntryUnit || first.MaterialBaseUnit || "").trim();
+        const quantity = group.reduce((sum, d) => sum + Number(d.QuantityInEntryUnit ?? d.QuantityInBaseUnit ?? 0), 0);
+
+        const palletKey = normalizeKey(purchaseOrderItem) || `material:${normalizeMaterial(material)}`;
+        const palletQuantity = palletQtyByKey.get(palletKey) ?? null;
+
+        let materialDescription = "";
+        if (purchaseOrder && purchaseOrderItem) {
+          const poKey = `${purchaseOrder}|${purchaseOrderItem}`;
+          if (!descriptionByPoItem.has(poKey)) {
+            try {
+              const po = await fetchPurchaseOrder(purchaseOrder, purchaseOrderItem);
+              descriptionByPoItem.set(poKey, po.lineItems[0]?.materialDescription || "");
+            } catch (err) {
+              descriptionByPoItem.set(poKey, "");
+              // eslint-disable-next-line no-console
+              console.debug("Purchase Order Fact Sheet description lookup failed for", poKey, err.message);
+            }
+          }
+          materialDescription = descriptionByPoItem.get(poKey);
+        }
+
+        builtLabels.push({
+          materialNumber: material,
+          materialDescription,
+          batch,
+          quantity,
+          uom,
+          palletQuantity,
+          purchaseOrder,
+          purchaseOrderItem,
+          materialDocument: trimmedDocNumber,
+          location: plant && storageLocation ? `${plant}/${storageLocation}` : (plant || storageLocation || ""),
+          printCount: 0,
+          printedAt: null,
+        });
+      }
+
+      setLabels(builtLabels);
+      setActiveIndex(0);
     } catch (err) {
-      setError(err.message || "Failed to fetch label data.");
+      setError(err.message || "Failed to fetch labels.");
     } finally {
       setLoading(false);
     }
   };
 
-  const handleBatchComplete = (value) => {
-    const validationError = validateBarcode(value, "Batch");
-    if (validationError) {
-      setError(validationError);
-      return;
+  // Auto-fetch when routed here from GoodReceipt2Page's "Print Label" button with the
+  // Material Document already known.
+  useEffect(() => {
+    if (location.state?.materialDocNumber && location.state?.materialDocYear) {
+      fetchLabels(location.state.materialDocNumber, location.state.materialDocYear);
     }
-    fetchLabelData(value.trim().toUpperCase());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleFetch = () => fetchLabels(materialDocNumber, materialDocYear);
+
+  const applyPrintResult = (index, result) => {
+    setLabels((prev) =>
+      prev.map((l, i) => (i === index ? { ...l, printedAt: result.printedAt, printCount: l.printCount + 1 } : l))
+    );
   };
 
-  const applyPrintResult = (result) => {
-    setLabel((prev) => ({ ...prev, printedAt: result.printedAt, printCount: prev.printCount + 1 }));
-  };
-
-  const handlePrint = async () => {
+  const handlePrintCurrent = async () => {
     setError("");
-    setPrinting(true);
+    setPrintingIndex(activeIndex);
     try {
-      const result = await printLabel(label);
-      applyPrintResult(result);
+      const result = await printLabel(labels[activeIndex]);
+      applyPrintResult(activeIndex, result);
     } catch (err) {
       setError(err.message || "Print failed.");
     } finally {
-      setPrinting(false);
+      setPrintingIndex(null);
     }
   };
 
-  const handleReprint = async () => {
+  const handleReprintCurrent = async () => {
     setError("");
-    setPrinting(true);
+    setPrintingIndex(activeIndex);
     try {
-      const result = await reprintLabel(label);
-      applyPrintResult(result);
+      const result = await reprintLabel(labels[activeIndex]);
+      applyPrintResult(activeIndex, result);
     } catch (err) {
       setError(err.message || "Reprint failed.");
     } finally {
-      setPrinting(false);
+      setPrintingIndex(null);
     }
   };
 
-  const handlePrintAnother = () => {
-    setLabel(null);
-    setBatch("");
+  // Printed sequentially (rather than in parallel) so a bad connection to the printer
+  // doesn't fire ten overlapping jobs at once — and stops at the first failure, since
+  // every remaining label almost certainly shares whatever problem just broke the
+  // first one (printer offline, etc.); already-printed labels keep their printCount,
+  // so the user can pick up with Print/Reprint on the ones still outstanding.
+  const handlePrintAll = async () => {
     setError("");
-    batchInputRef.current?.focus();
+    setPrintingAll(true);
+    for (let i = 0; i < labels.length; i++) {
+      setPrintAllProgress(`Printing label ${i + 1} of ${labels.length} (Batch ${labels[i].batch})…`);
+      try {
+        const result = await printLabel(labels[i]);
+        applyPrintResult(i, result);
+      } catch (err) {
+        setError(`Failed to print label ${i + 1} of ${labels.length} (Batch ${labels[i].batch}): ${err.message || "Unknown error."}`);
+        break;
+      }
+    }
+    setPrintAllProgress("");
+    setPrintingAll(false);
   };
+
+  const handleReset = () => {
+    setLabels([]);
+    setMaterialDocNumber("");
+    setMaterialDocYear(String(new Date().getFullYear()));
+    setError("");
+  };
+
+  const busy = loading || printingIndex != null || printingAll;
+  const activeLabel = labels[activeIndex];
 
   return (
     <div className="app-container">
@@ -192,77 +241,134 @@ function LabelPrintingPage({ user, onLogout }) {
 
           {error && <div className="error">{error}</div>}
 
-          {!label && (
-            <div className="form-group">
-              <label>Batch</label>
-              <BarcodeInput
-                ref={batchInputRef}
-                value={batch}
-                onChange={setBatch}
-                onComplete={handleBatchComplete}
-                maxLength={BATCH_BARCODE_MAX_LENGTH}
-                placeholder="Scan or enter Batch"
-                disabled={loading}
-              />
-              {loading && <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.85rem" }}>Looking up Batch…</div>}
+          {labels.length === 0 && (
+            <div style={{ display: "flex", gap: "0.75rem" }}>
+              <div className="form-group" style={{ flex: "2 1 0%" }}>
+                <label>Material Document Number</label>
+                <BarcodeInput
+                  value={materialDocNumber}
+                  onChange={setMaterialDocNumber}
+                  onComplete={() => handleFetch()}
+                  placeholder="Scan or enter Material Document"
+                  disabled={loading}
+                />
+              </div>
+              <div className="form-group" style={{ flex: "1 1 0%" }}>
+                <label>Year</label>
+                <input
+                  className="form-control"
+                  value={materialDocYear}
+                  onChange={(e) => setMaterialDocYear(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleFetch()}
+                  placeholder="YYYY"
+                  maxLength={4}
+                  disabled={loading}
+                />
+              </div>
             </div>
           )}
 
-          {label && (() => {
-            const { short: descShort, rest: descRest } = splitMaterialDescription(label.materialDescription);
+          {labels.length === 0 && (
+            <div style={{ display: "flex", justifyContent: "center", marginTop: "0.75rem" }}>
+              <LoadingButton onClick={handleFetch} loading={loading}>Fetch</LoadingButton>
+            </div>
+          )}
+
+          {loading && labels.length === 0 && (
+            <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.85rem", textAlign: "center" }}>
+              Looking up Material Document…
+            </div>
+          )}
+
+          {labels.length > 0 && activeLabel && (() => {
+            const { short: descShort, rest: descRest } = splitMaterialDescription(activeLabel.materialDescription);
             return (
-              <div style={{ border: "2px dashed #9ca3af", borderRadius: "10px", padding: "1.25rem", background: "#fafafa" }}>
-                <div style={{ margin: "0 0 0.5rem", textAlign: "center" }}>
-                  <BarcodeDisplay value={label.batch} displayValue={false} />
+              <>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.75rem" }}>
+                  <LoadingButton
+                    onClick={() => setActiveIndex((i) => Math.max(0, i - 1))}
+                    variant="neutral"
+                    disabled={activeIndex === 0 || busy}
+                  >
+                    Prev
+                  </LoadingButton>
+                  <div style={{ fontSize: "0.9rem", color: "#374151" }}>
+                    Label {activeIndex + 1} of {labels.length}
+                  </div>
+                  <LoadingButton
+                    onClick={() => setActiveIndex((i) => Math.min(labels.length - 1, i + 1))}
+                    variant="neutral"
+                    disabled={activeIndex === labels.length - 1 || busy}
+                  >
+                    Next
+                  </LoadingButton>
                 </div>
-                <div style={{ textAlign: "center", fontSize: "2rem", fontWeight: 800, letterSpacing: "1px" }}>
-                  {descShort}
+
+                <div style={{ border: "2px dashed #9ca3af", borderRadius: "10px", padding: "1.25rem", background: "#fafafa" }}>
+                  <div style={{ margin: "0 0 0.5rem", textAlign: "center" }}>
+                    <BarcodeDisplay value={activeLabel.batch} displayValue={false} />
+                  </div>
+                  <div style={{ textAlign: "center", fontSize: "2rem", fontWeight: 800, letterSpacing: "1px" }}>
+                    {descShort}
+                  </div>
+                  <div style={{ textAlign: "center", color: "#374151", marginBottom: "0.75rem" }}>
+                    {descRest}
+                  </div>
+                  <div style={{ borderTop: "1px solid #d1d5db", margin: "0.75rem 0" }} />
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", rowGap: "0.75rem", columnGap: "1rem", fontSize: "0.95rem" }}>
+                    <LabelField heading="Pur. Doc." value={activeLabel.purchaseOrder || "-"} />
+                    <LabelField heading="Pur. Item" value={activeLabel.purchaseOrderItem || "-"} />
+                    <LabelField heading="Material" value={activeLabel.materialNumber} />
+                    <LabelField heading="Batch" value={activeLabel.batch} />
+                    <LabelField heading="Mat. Doc." value={activeLabel.materialDocument || "-"} />
+                    <LabelField heading="Location" value={activeLabel.location || "-"} />
+                    <LabelField heading="Qty" value={`${activeLabel.quantity} ${activeLabel.uom}`} />
+                    <LabelField
+                      heading="Pallet Qty"
+                      value={activeLabel.palletQuantity != null ? `${activeLabel.palletQuantity} ${activeLabel.uom}` : "-"}
+                    />
+                  </div>
+                  <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
+                    {activeLabel.printCount > 0
+                      ? `Printed ${activeLabel.printCount}x — last at ${activeLabel.printedAt}`
+                      : "Not printed yet"}
+                  </div>
                 </div>
-                <div style={{ textAlign: "center", color: "#374151", marginBottom: "0.75rem" }}>
-                  {descRest}
+
+                <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.25rem" }}>
+                  <LoadingButton onClick={handlePrintCurrent} loading={printingIndex === activeIndex}>Print</LoadingButton>
+                  <LoadingButton
+                    onClick={handleReprintCurrent}
+                    loading={printingIndex === activeIndex}
+                    disabled={activeLabel.printCount === 0}
+                    variant="neutral"
+                  >
+                    Reprint
+                  </LoadingButton>
                 </div>
-                <div style={{ borderTop: "1px solid #d1d5db", margin: "0.75rem 0" }} />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", rowGap: "0.75rem", columnGap: "1rem", fontSize: "0.95rem" }}>
-                  <LabelField heading="Pur. Doc." value={label.purchaseOrder || "-"} />
-                  <LabelField heading="Pur. Item" value={label.purchaseOrderItem || "-"} />
-                  <LabelField heading="Material" value={label.materialNumber} />
-                  <LabelField heading="Batch" value={label.batch} />
-                  <LabelField heading="Mat. Doc." value={label.materialDocument || "-"} />
-                  <LabelField heading="Location" value={label.location || "-"} />
-                  <LabelField heading="Qty" value={`${label.quantity} ${label.uom}`} />
-                  <LabelField
-                    heading="Pallet Qty"
-                    value={label.palletQuantity != null ? `${label.palletQuantity} ${label.uom}` : "-"}
-                  />
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  <LoadingButton onClick={handlePrintAll} loading={printingAll} disabled={loading} variant="neutral">
+                    Print All {labels.length} Labels
+                  </LoadingButton>
                 </div>
-                <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
-                  {label.printCount > 0 ? `Printed ${label.printCount}x — last at ${label.printedAt}` : "Not printed yet"}
+                {printAllProgress && (
+                  <div style={{ marginTop: "0.5rem", color: "#6b7280", fontSize: "0.85rem" }}>{printAllProgress}</div>
+                )}
+
+                <div style={{ marginTop: "0.75rem" }}>
+                  <LoadingButton onClick={handleReset} disabled={busy} variant="neutral">
+                    New Material Document
+                  </LoadingButton>
                 </div>
-              </div>
+              </>
             );
           })()}
-
-          {label && (
-            <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.25rem" }}>
-              <LoadingButton onClick={handlePrint} loading={printing}>Print</LoadingButton>
-              <LoadingButton onClick={handleReprint} loading={printing} disabled={label.printCount === 0} variant="neutral">
-                Reprint
-              </LoadingButton>
-            </div>
-          )}
-
-          {label && (
-            <div style={{ marginTop: "0.75rem" }}>
-              <LoadingButton onClick={handlePrintAnother} disabled={printing} variant="neutral">
-                Print Another
-              </LoadingButton>
-            </div>
-          )}
         </div>
       </div>
 
       <div style={{ position: "fixed", bottom: "20px", left: "20px" }}>
-        <LoadingButton onClick={() => navigate("/main")} variant="neutral" disabled={printing || loading}>
+        <LoadingButton onClick={() => navigate("/main")} variant="neutral" disabled={busy}>
           Back
         </LoadingButton>
       </div>
