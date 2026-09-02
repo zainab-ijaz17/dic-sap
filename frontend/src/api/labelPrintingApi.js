@@ -17,7 +17,7 @@ function zplEscape(value) {
 // right below it fills that visual role instead), the Material Description's short
 // code large with the rest of the description wrapped underneath, then Purchase
 // Order/Item, Material/Batch, Material Document/Location and Quantity as a two-column
-// grid, and finally Expiration Date.
+// grid.
 export function buildZplLabel(label) {
   const { short: descShort, rest: descRest } = splitMaterialDescription(label.materialDescription);
   const lines = [
@@ -37,7 +37,6 @@ export function buildZplLabel(label) {
     `^FO420,425^A0N,28,28^FDLocation: ${zplEscape(label.location || "-")}^FS`,
     `^FO40,460^A0N,28,28^FDQty: ${zplEscape(label.quantity)} ${zplEscape(label.uom)}^FS`,
     "^FO40,500^GB732,2,2^FS",
-    `^FO40,530^A0N,28,28^FDExpiration Date: ${zplEscape(label.expirationDate || "-")}^FS`,
     "^XZ",
   ];
   return lines.join("\n");

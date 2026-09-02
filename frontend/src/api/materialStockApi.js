@@ -109,7 +109,12 @@ export async function fetchMaterialBatchStock(material, storageLocation) {
 // which only has a Batch to work from. Summed across every Storage Location the
 // batch is split across; UOM is taken from the first row since it's the same
 // Material throughout.
-export async function fetchBatchQuantity(material, batch) {
+// `plant` (pass the batch's BatchIdentifyingPlant when known, e.g. from
+// fetchBatchInfo) scopes the lookup to that Plant — without it, a Batch number that
+// happens to repeat under a different Plant (batch level can be Plant-specific) would
+// get silently summed into the result, overstating the quantity of the single batch
+// actually entered.
+export async function fetchBatchQuantity(material, batch, plant) {
   const creds = getUserCredentials();
   if (!creds?.username || !creds?.password) {
     throw new Error("User not authenticated. Please log in again.");
@@ -120,7 +125,7 @@ export async function fetchBatchQuantity(material, batch) {
   let response;
   try {
     response = await axios.get(url, {
-      params: { material, batch },
+      params: { material, batch, plant: plant || undefined },
       headers: {
         "X-User-Auth": btoa(`${creds.username}:${creds.password}`),
         "X-User-Environment": creds.environment,

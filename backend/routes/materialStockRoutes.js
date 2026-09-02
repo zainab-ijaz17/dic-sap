@@ -116,9 +116,14 @@ router.options('/batches', (req, res) => {
 // Storage Locations it's split across, same entity as /batches above, just filtered
 // by Batch instead of StorageLocation) — used by Label Printing, which only has a
 // Batch to work from, not a Storage Location.
+// `plant` is optional but should be passed whenever known (e.g. the batch's
+// BatchIdentifyingPlant): batch numbers aren't guaranteed unique across Plants when
+// batch level is Plant-specific, so filtering by Material+Batch alone can silently
+// sum in an unrelated batch from another Plant that just happens to reuse the same
+// Batch number, overstating the quantity of the one batch actually entered.
 router.get('/batch-quantity', async (req, res) => {
   try {
-    const { material, batch } = req.query;
+    const { material, batch, plant } = req.query;
     if (!material || !batch) {
       return res.status(400).json({
         error: 'Invalid request',
@@ -135,7 +140,9 @@ router.get('/batch-quantity', async (req, res) => {
     }
 
     const baseUrl = BASE_URLS[environment];
-    const filter = `Material eq '${material}' and Batch eq '${batch}'`;
+    const filterParts = [`Material eq '${material}'`, `Batch eq '${batch}'`];
+    if (plant) filterParts.push(`Plant eq '${plant}'`);
+    const filter = filterParts.join(' and ');
     const url = `${baseUrl}${STOCK_ENTITY_PATH}?$filter=${encodeURIComponent(filter)}`;
 
     console.log(`[${environment.toUpperCase()}] Batch Quantity lookup URL:`, url);

@@ -6,7 +6,6 @@ import BarcodeInput from "../components/BarcodeInput";
 import BarcodeDisplay from "../components/BarcodeDisplay";
 import { fetchBatchInfo, fetchBatchDocumentInfo } from "../api/batchInfoApi";
 import { fetchBatchQuantity } from "../api/materialStockApi";
-import { fetchExpirationDate } from "../api/batchClassApi";
 import { fetchPurchaseOrder } from "../api/goodsReceiptApi";
 import { printLabel, reprintLabel } from "../api/labelPrintingApi";
 import { BATCH_BARCODE_MAX_LENGTH } from "../constants/barcode";
@@ -14,9 +13,8 @@ import { validateBarcode } from "../utils/barcodeValidation";
 import { splitMaterialDescription } from "../utils/materialDescription";
 
 // Label Printing — scan (or type) a Batch, look up its Material/Description
-// (../api/batchInfoApi.js), current stock Quantity (../api/materialStockApi.js),
-// Expiration Date characteristic (../api/batchClassApi.js), and the Purchase
-// Order/Material Document it was received against (../api/batchInfoApi.js's
+// (../api/batchInfoApi.js), current stock Quantity (../api/materialStockApi.js), and
+// the Purchase Order/Material Document it was received against (../api/batchInfoApi.js's
 // fetchBatchDocumentInfo, plus ../api/goodsReceiptApi.js's fetchPurchaseOrder for the
 // description), then print a label carrying all of it plus a Code128 barcode of the
 // Batch — see buildZplLabel in ../api/labelPrintingApi.js for the actual label layout.
@@ -38,10 +36,13 @@ function LabelPrintingPage({ user, onLogout }) {
     setLoading(true);
     try {
       const info = await fetchBatchInfo(batchValue);
-      const [stock, expirationDate, docInfo] = await Promise.all([
-        fetchBatchQuantity(info.material, batchValue),
-        fetchExpirationDate(info.material, batchValue),
-        fetchBatchDocumentInfo(batchValue),
+      // Both lookups are scoped with Material/Plant (info.material/info.plant) on top
+      // of Batch — Batch numbers aren't guaranteed unique across Materials or Plants,
+      // so without this a same-numbered batch elsewhere could get silently summed
+      // into the quantity or swap in an unrelated PO/Material Document.
+      const [stock, docInfo] = await Promise.all([
+        fetchBatchQuantity(info.material, batchValue, info.plant),
+        fetchBatchDocumentInfo(batchValue, info.material),
       ]);
 
       // API_BATCH_SRV/Batch's MaterialDescription (info.materialDescription) comes
@@ -73,7 +74,6 @@ function LabelPrintingPage({ user, onLogout }) {
         batch: batchValue,
         quantity: stock.quantity,
         uom: stock.uom,
-        expirationDate,
         purchaseOrder: docInfo.purchaseOrder,
         purchaseOrderItem: docInfo.purchaseOrderItem,
         materialDocument: docInfo.materialDocument,
@@ -183,8 +183,6 @@ function LabelPrintingPage({ user, onLogout }) {
                   <div><strong>Location:</strong> {label.location || "-"}</div>
                   <div style={{ gridColumn: "1 / -1" }}><strong>Qty:</strong> {label.quantity} {label.uom}</div>
                 </div>
-                <div style={{ borderTop: "1px solid #d1d5db", margin: "0.75rem 0" }} />
-                <div style={{ marginBottom: "0.5rem" }}><strong>Expiration Date:</strong> {label.expirationDate || "-"}</div>
                 <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
                   {label.printCount > 0 ? `Printed ${label.printCount}x — last at ${label.printedAt}` : "Not printed yet"}
                 </div>

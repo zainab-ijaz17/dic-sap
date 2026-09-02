@@ -85,9 +85,13 @@ export async function fetchBatchInfo(batch) {
 // which Purchase Order/Material Document a batch was actually posted against, so this
 // is a separate lookup — used by LabelPrintingPage.js to print those fields plus the
 // Plant/Storage Location the batch was posted to.
+// `material` (pass fetchBatchInfo's result) scopes the lookup to that Material —
+// Batch numbers aren't guaranteed unique across Materials, so without it this could
+// return a completely unrelated Material's document that just happens to reuse the
+// same Batch number.
 // Returns blank fields (never throws) if the batch has no Material Document on
 // record, since a missing PO/Doc shouldn't block printing the rest of the label.
-export async function fetchBatchDocumentInfo(batch) {
+export async function fetchBatchDocumentInfo(batch, material) {
   const creds = getUserCredentials();
   if (!creds?.username || !creds?.password) {
     throw new Error("User not authenticated. Please log in again.");
@@ -98,7 +102,7 @@ export async function fetchBatchDocumentInfo(batch) {
   let response;
   try {
     response = await axios.get(url, {
-      params: { batch },
+      params: { batch, material: material || undefined },
       headers: {
         "X-User-Auth": btoa(`${creds.username}:${creds.password}`),
         "X-User-Environment": creds.environment,

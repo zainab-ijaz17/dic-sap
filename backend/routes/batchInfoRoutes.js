@@ -131,9 +131,13 @@ const MATERIAL_DOCUMENT_BASE_URLS = {
 // correction), so the most recent one (highest MaterialDocumentYear, then
 // MaterialDocument, then MaterialDocumentItem) is returned — same "latest wins"
 // precedent as stpoGoodsReceiptRoutes.js's /stpo-batches.
+// Batch numbers aren't guaranteed unique across Materials (batch level can be
+// Material-specific rather than client-wide), so `material` is filtered on too
+// whenever the caller has it — otherwise this could return a completely unrelated
+// Material's document that just happens to reuse the same Batch number.
 router.get('/document', async (req, res) => {
   try {
-    const { batch } = req.query;
+    const { batch, material } = req.query;
     if (!batch) {
       return res.status(400).json({
         error: 'Invalid request',
@@ -150,7 +154,9 @@ router.get('/document', async (req, res) => {
     }
 
     const baseUrl = MATERIAL_DOCUMENT_BASE_URLS[environment];
-    const filter = `Batch eq '${batch}'`;
+    const filterParts = [`Batch eq '${batch}'`];
+    if (material) filterParts.push(`Material eq '${material}'`);
+    const filter = filterParts.join(' and ');
     const select = 'Material,Batch,MaterialDocument,MaterialDocumentYear,MaterialDocumentItem,PurchaseOrder,PurchaseOrderItem,Plant,StorageLocation,GoodsMovementType';
     const url = `${baseUrl}/A_MaterialDocumentItem?$filter=${encodeURIComponent(filter)}&$select=${select}&$format=json`;
 
