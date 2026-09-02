@@ -1,12 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import LoadingButton from "../components/LoadingButton";
 import BarcodeInput from "../components/BarcodeInput";
 import BarcodeDisplay from "../components/BarcodeDisplay";
 import { fetchPurchaseOrder, fetchMaterialDocumentItems } from "../api/goodsReceiptApi";
-import { printLabel, reprintLabel } from "../api/labelPrintingApi";
 import { splitMaterialDescription } from "../utils/materialDescription";
+import { buildLabelsPdfBlobUrl } from "../utils/labelsPdf";
 
 function normalizeKey(value) {
   return String(value ?? "").trim();
@@ -55,9 +55,8 @@ function LabelPrintingPage({ user, onLogout }) {
   const [labels, setLabels] = useState([]);
   const [activeIndex, setActiveIndex] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [printingIndex, setPrintingIndex] = useState(null);
-  const [printingAll, setPrintingAll] = useState(false);
-  const [printAllProgress, setPrintAllProgress] = useState("");
+  const [generatingPdf, setGeneratingPdf] = useState(false);
+  const [pdfPreviewUrl, setPdfPreviewUrl] = useState(null);
   const [error, setError] = useState("");
 
   const fetchLabels = async (docNumber, docYear) => {
@@ -142,8 +141,6 @@ function LabelPrintingPage({ user, onLogout }) {
           purchaseOrderItem,
           materialDocument: trimmedDocNumber,
           location: plant && storageLocation ? `${plant}/${storageLocation}` : (plant || storageLocation || ""),
-          printCount: 0,
-          printedAt: null,
         });
       }
 
@@ -165,60 +162,45 @@ function LabelPrintingPage({ user, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Revokes whatever blob: URL is current on unmount (e.g. navigating away via Back
+  // while the preview is still open) — handlePreviewPdf/closePdfPreview below already
+  // revoke on every other path (replacing or explicitly closing the preview). Reads
+  // through a ref rather than closing over pdfPreviewUrl, since a state update in an
+  // unmount cleanup accomplishes nothing (the component is already gone).
+  const pdfPreviewUrlRef = useRef(null);
+  pdfPreviewUrlRef.current = pdfPreviewUrl;
+  useEffect(() => {
+    return () => {
+      if (pdfPreviewUrlRef.current) URL.revokeObjectURL(pdfPreviewUrlRef.current);
+    };
+  }, []);
+
   const handleFetch = () => fetchLabels(materialDocNumber, materialDocYear);
 
-  const applyPrintResult = (index, result) => {
-    setLabels((prev) =>
-      prev.map((l, i) => (i === index ? { ...l, printedAt: result.printedAt, printCount: l.printCount + 1 } : l))
-    );
-  };
-
-  const handlePrintCurrent = async () => {
+  // Builds one PDF with every label side by side (buildLabelsPdfBlobUrl,
+  // ../utils/labelsPdf.js) and previews it in-app via an <iframe> — the browser's own
+  // PDF viewer supplies print/download from there, so there's no separate physical-
+  // printer round trip (or per-label print state) to track anymore.
+  const handlePreviewPdf = () => {
     setError("");
-    setPrintingIndex(activeIndex);
+    setGeneratingPdf(true);
     try {
-      const result = await printLabel(labels[activeIndex]);
-      applyPrintResult(activeIndex, result);
+      setPdfPreviewUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev);
+        return buildLabelsPdfBlobUrl(labels);
+      });
     } catch (err) {
-      setError(err.message || "Print failed.");
+      setError(err.message || "Failed to generate the PDF preview.");
     } finally {
-      setPrintingIndex(null);
+      setGeneratingPdf(false);
     }
   };
 
-  const handleReprintCurrent = async () => {
-    setError("");
-    setPrintingIndex(activeIndex);
-    try {
-      const result = await reprintLabel(labels[activeIndex]);
-      applyPrintResult(activeIndex, result);
-    } catch (err) {
-      setError(err.message || "Reprint failed.");
-    } finally {
-      setPrintingIndex(null);
-    }
-  };
-
-  // Printed sequentially (rather than in parallel) so a bad connection to the printer
-  // doesn't fire ten overlapping jobs at once — and stops at the first failure, since
-  // every remaining label almost certainly shares whatever problem just broke the
-  // first one (printer offline, etc.); already-printed labels keep their printCount,
-  // so the user can pick up with Print/Reprint on the ones still outstanding.
-  const handlePrintAll = async () => {
-    setError("");
-    setPrintingAll(true);
-    for (let i = 0; i < labels.length; i++) {
-      setPrintAllProgress(`Printing label ${i + 1} of ${labels.length} (Batch ${labels[i].batch})…`);
-      try {
-        const result = await printLabel(labels[i]);
-        applyPrintResult(i, result);
-      } catch (err) {
-        setError(`Failed to print label ${i + 1} of ${labels.length} (Batch ${labels[i].batch}): ${err.message || "Unknown error."}`);
-        break;
-      }
-    }
-    setPrintAllProgress("");
-    setPrintingAll(false);
+  const closePdfPreview = () => {
+    setPdfPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return null;
+    });
   };
 
   const handleReset = () => {
@@ -228,7 +210,7 @@ function LabelPrintingPage({ user, onLogout }) {
     setError("");
   };
 
-  const busy = loading || printingIndex != null || printingAll;
+  const busy = loading || generatingPdf;
   const activeLabel = labels[activeIndex];
 
   return (
@@ -330,33 +312,7 @@ function LabelPrintingPage({ user, onLogout }) {
                       value={activeLabel.palletQuantity != null ? `${activeLabel.palletQuantity} ${activeLabel.uom}` : "-"}
                     />
                   </div>
-                  <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
-                    {activeLabel.printCount > 0
-                      ? `Printed ${activeLabel.printCount}x — last at ${activeLabel.printedAt}`
-                      : "Not printed yet"}
-                  </div>
                 </div>
-
-                <div style={{ display: "flex", gap: "0.75rem", marginTop: "1.25rem" }}>
-                  <LoadingButton onClick={handlePrintCurrent} loading={printingIndex === activeIndex}>Print</LoadingButton>
-                  <LoadingButton
-                    onClick={handleReprintCurrent}
-                    loading={printingIndex === activeIndex}
-                    disabled={activeLabel.printCount === 0}
-                    variant="neutral"
-                  >
-                    Reprint
-                  </LoadingButton>
-                </div>
-
-                <div style={{ marginTop: "0.75rem" }}>
-                  <LoadingButton onClick={handlePrintAll} loading={printingAll} disabled={loading} variant="neutral">
-                    Print All {labels.length} Labels
-                  </LoadingButton>
-                </div>
-                {printAllProgress && (
-                  <div style={{ marginTop: "0.5rem", color: "#6b7280", fontSize: "0.85rem" }}>{printAllProgress}</div>
-                )}
 
                 <div style={{ marginTop: "0.75rem" }}>
                   <LoadingButton onClick={handleReset} disabled={busy} variant="neutral">
@@ -374,6 +330,27 @@ function LabelPrintingPage({ user, onLogout }) {
           Back
         </LoadingButton>
       </div>
+
+      {labels.length > 0 && (
+        <div style={{ position: "fixed", bottom: "20px", right: "20px" }}>
+          <LoadingButton onClick={handlePreviewPdf} loading={generatingPdf} disabled={loading}>
+            Print
+          </LoadingButton>
+        </div>
+      )}
+
+      {pdfPreviewUrl && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)", zIndex: 100, display: "flex", flexDirection: "column" }}>
+          <div style={{ display: "flex", justifyContent: "flex-end", padding: "0.75rem 1rem", background: "#111827" }}>
+            <LoadingButton onClick={closePdfPreview} variant="neutral">Close</LoadingButton>
+          </div>
+          <iframe
+            src={pdfPreviewUrl}
+            title="Labels PDF Preview"
+            style={{ flex: 1, border: "none", background: "white" }}
+          />
+        </div>
+      )}
     </div>
   );
 }
