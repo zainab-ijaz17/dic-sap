@@ -289,8 +289,9 @@ function LabelPrintingPage({ user, onLogout }) {
                     onClick={() => setActiveIndex((i) => Math.max(0, i - 1))}
                     variant="neutral"
                     disabled={activeIndex === 0 || busy}
+                    style={{ padding: "0.6rem 1rem", fontSize: "1.2rem", borderRadius: "999px" }}
                   >
-                    Prev
+                    ←
                   </LoadingButton>
                   <div style={{ fontSize: "0.9rem", color: "#374151" }}>
                     Label {activeIndex + 1} of {labels.length}
@@ -299,8 +300,9 @@ function LabelPrintingPage({ user, onLogout }) {
                     onClick={() => setActiveIndex((i) => Math.min(labels.length - 1, i + 1))}
                     variant="neutral"
                     disabled={activeIndex === labels.length - 1 || busy}
+                    style={{ padding: "0.6rem 1rem", fontSize: "1.2rem", borderRadius: "999px" }}
                   >
-                    Next
+                    →
                   </LoadingButton>
                 </div>
 
