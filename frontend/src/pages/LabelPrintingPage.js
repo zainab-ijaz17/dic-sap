@@ -6,19 +6,23 @@ import BarcodeInput from "../components/BarcodeInput";
 import BarcodeDisplay from "../components/BarcodeDisplay";
 import { fetchBatchInfo, fetchBatchDocumentInfo } from "../api/batchInfoApi";
 import { fetchBatchQuantity } from "../api/materialStockApi";
-import { fetchExpirationDate, fetchBin } from "../api/batchClassApi";
+import { fetchExpirationDate } from "../api/batchClassApi";
+import { fetchPurchaseOrder } from "../api/goodsReceiptApi";
 import { printLabel, reprintLabel } from "../api/labelPrintingApi";
 import { BATCH_BARCODE_MAX_LENGTH } from "../constants/barcode";
 import { validateBarcode } from "../utils/barcodeValidation";
 import { splitMaterialDescription } from "../utils/materialDescription";
 
 // Label Printing — scan (or type) a Batch, look up its Material/Description
-// (../api/batchInfoApi.js), current stock Quantity (../api/materialStockApi.js), and
-// Expiration Date characteristic (../api/batchClassApi.js), then print a label
-// carrying all of it plus a Code128 barcode of the Batch — see buildZplLabel in
-// ../api/labelPrintingApi.js for the actual label layout. Printing sends the ZPL to a
-// network Zebra printer via backend/routes/labelPrintingRoutes.js; set
-// LABEL_PRINTER_HOST_DEV/PRD in backend/.env to the real printer IP once known.
+// (../api/batchInfoApi.js), current stock Quantity (../api/materialStockApi.js),
+// Expiration Date characteristic (../api/batchClassApi.js), and the Purchase
+// Order/Material Document it was received against (../api/batchInfoApi.js's
+// fetchBatchDocumentInfo, plus ../api/goodsReceiptApi.js's fetchPurchaseOrder for the
+// description), then print a label carrying all of it plus a Code128 barcode of the
+// Batch — see buildZplLabel in ../api/labelPrintingApi.js for the actual label layout.
+// Printing sends the ZPL to a network Zebra printer via
+// backend/routes/labelPrintingRoutes.js; set LABEL_PRINTER_HOST_DEV/PRD in
+// backend/.env to the real printer IP once known.
 function LabelPrintingPage({ user, onLogout }) {
   const navigate = useNavigate();
   const batchInputRef = useRef(null);
@@ -34,12 +38,29 @@ function LabelPrintingPage({ user, onLogout }) {
     setLoading(true);
     try {
       const info = await fetchBatchInfo(batchValue);
-      const [stock, expirationDate, bin, docInfo] = await Promise.all([
+      const [stock, expirationDate, docInfo] = await Promise.all([
         fetchBatchQuantity(info.material, batchValue),
         fetchExpirationDate(info.material, batchValue),
-        fetchBin(info.material, batchValue),
         fetchBatchDocumentInfo(batchValue),
       ]);
+
+      // API_BATCH_SRV/Batch's MaterialDescription (info.materialDescription) comes
+      // back blank in practice, so fall back to the Purchase Order Fact Sheet's item
+      // text for the PO/Item this batch was received against — the same lookup
+      // GoodReceiptPage.js already relies on (fetchPurchaseOrder, ../api/goodsReceiptApi.js)
+      // and confirmed working there. Only attempted when a PO/Item is on record; a
+      // failure here (or no PO/Item at all) just leaves whatever API_BATCH_SRV returned.
+      let materialDescription = info.materialDescription;
+      if (docInfo.purchaseOrder && docInfo.purchaseOrderItem) {
+        try {
+          const po = await fetchPurchaseOrder(docInfo.purchaseOrder, docInfo.purchaseOrderItem);
+          materialDescription = po.lineItems[0]?.materialDescription || materialDescription;
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.debug("Purchase Order Fact Sheet description lookup failed, keeping API_BATCH_SRV value:", err.message);
+        }
+      }
+
       // Plant/Storage Location: prefer the batch's current stock location
       // (fetchBatchQuantity), falling back to where the Material Document posted it
       // and then to API_BATCH_SRV's BatchIdentifyingPlant, in case any one source
@@ -48,12 +69,11 @@ function LabelPrintingPage({ user, onLogout }) {
       const storageLocation = stock.storageLocation || docInfo.storageLocation || "";
       setLabel({
         materialNumber: info.material,
-        materialDescription: info.materialDescription,
+        materialDescription,
         batch: batchValue,
         quantity: stock.quantity,
         uom: stock.uom,
         expirationDate,
-        bin,
         purchaseOrder: docInfo.purchaseOrder,
         purchaseOrderItem: docInfo.purchaseOrderItem,
         materialDocument: docInfo.materialDocument,
@@ -165,9 +185,6 @@ function LabelPrintingPage({ user, onLogout }) {
                 </div>
                 <div style={{ borderTop: "1px solid #d1d5db", margin: "0.75rem 0" }} />
                 <div style={{ marginBottom: "0.5rem" }}><strong>Expiration Date:</strong> {label.expirationDate || "-"}</div>
-                <div style={{ margin: "0.75rem 0", textAlign: "center" }}>
-                  {label.bin ? <BarcodeDisplay value={label.bin} /> : <div style={{ color: "#6b7280" }}>Bin: not yet assigned</div>}
-                </div>
                 <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
                   {label.printCount > 0 ? `Printed ${label.printCount}x — last at ${label.printedAt}` : "Not printed yet"}
                 </div>
