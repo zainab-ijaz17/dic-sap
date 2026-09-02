@@ -148,11 +148,16 @@ export async function fetchBatchQuantity(material, batch) {
 
   const rows = (data.items || []).map(mapBatchStock);
   if (rows.length === 0) {
-    return { quantity: 0, uom: "" };
+    return { quantity: 0, uom: "", plant: "", storageLocation: "" };
   }
 
+  // Plant/Storage Location are taken from the first row too (see the UOM comment
+  // above) — used by LabelPrintingPage.js to print the batch's current location as
+  // Plant/StorageLocation, e.g. "1311/T001".
   return {
     quantity: rows.reduce((sum, row) => sum + row.quantity, 0),
     uom: rows[0].uom,
+    plant: rows[0].plant,
+    storageLocation: rows[0].storageLocation,
   };
 }
