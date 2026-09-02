@@ -3,31 +3,43 @@ import { useLocation, useNavigate } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import LoadingButton from "../components/LoadingButton";
 import { postBatchCharacteristics } from "../api/batchClassApi";
-import { BATCH_CHARACTERISTICS, BIN_CHARACTERISTIC, emptyBatchCharacteristicValues } from "../constants/batchClass";
+import { BATCH_CHARACTERISTICS, emptyBatchCharacteristicValues } from "../constants/batchClass";
 
 // Add Batch Characteristics — retry screen for batches whose classification failed
 // right after a GR post (GoodReceipt2Page.js, GrStpo2Page.js). Reachable only via the
 // "Try Again" button on BatchClassificationFailurePopup.js — deliberately not linked
 // from MainPage, since it only makes sense with a specific list of failed
 // { materialNumber, materialDescription, batch } entries passed via router state.
-// Each failed batch gets its own card so the user can re-enter every characteristic
-// (incl. Bin, defaulted back to "floor") and resubmit — same postBatchCharacteristics
-// call GR itself made, just retried with values the user can now edit.
+// One card per Material rather than per Batch — packaging size, lot number, etc. are
+// the same for every Batch of a Material received together, so the user enters them
+// once and Post fires one postBatchCharacteristics call per Batch of that Material
+// using those same values, tracking each Batch's own success/error underneath.
 function AddBatchCharacteristicsPage({ user, onLogout }) {
   const location = useLocation();
   const navigate = useNavigate();
   const failedItems = location.state?.failedItems || [];
 
-  const [entries, setEntries] = useState(() =>
-    failedItems.map((item) => ({
-      materialNumber: item.materialNumber,
-      materialDescription: item.materialDescription,
-      batch: item.batch,
-      values: { ...emptyBatchCharacteristicValues(), bin: "floor" },
-      status: "idle", // idle | posting | success | error
-      errorMessage: "",
-    }))
-  );
+  const [entries, setEntries] = useState(() => {
+    const entriesByMaterial = [];
+    const indexByMaterial = new Map();
+    failedItems.forEach((item) => {
+      if (!indexByMaterial.has(item.materialNumber)) {
+        indexByMaterial.set(item.materialNumber, entriesByMaterial.length);
+        entriesByMaterial.push({
+          materialNumber: item.materialNumber,
+          materialDescription: item.materialDescription,
+          values: emptyBatchCharacteristicValues(),
+          batches: [],
+        });
+      }
+      entriesByMaterial[indexByMaterial.get(item.materialNumber)].batches.push({
+        batch: item.batch,
+        status: "idle", // idle | posting | success | error
+        errorMessage: "",
+      });
+    });
+    return entriesByMaterial;
+  });
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -37,33 +49,54 @@ function AddBatchCharacteristicsPage({ user, onLogout }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const handleValueChange = (index, key, value) => {
+  const handleValueChange = (materialIndex, key, value) => {
     setEntries((prev) =>
-      prev.map((entry, i) => (i === index ? { ...entry, values: { ...entry.values, [key]: value } } : entry))
+      prev.map((entry, i) => (i === materialIndex ? { ...entry, values: { ...entry.values, [key]: value } } : entry))
     );
   };
 
-  const allSucceeded = entries.length > 0 && entries.every((entry) => entry.status === "success");
+  const setBatchStatus = (materialIndex, batchIndex, status, errorMessage = "") => {
+    setEntries((prev) =>
+      prev.map((entry, i) =>
+        i === materialIndex
+          ? { ...entry, batches: entry.batches.map((b, bi) => (bi === batchIndex ? { ...b, status, errorMessage } : b)) }
+          : entry
+      )
+    );
+  };
+
+  const allSucceeded =
+    entries.length > 0 && entries.every((entry) => entry.batches.every((b) => b.status === "success"));
 
   const handlePostAll = async () => {
     setLoading(true);
-    setEntries((prev) => prev.map((entry) => (entry.status === "success" ? entry : { ...entry, status: "posting", errorMessage: "" })));
+    setEntries((prev) =>
+      prev.map((entry) => ({
+        ...entry,
+        batches: entry.batches.map((b) => (b.status === "success" ? b : { ...b, status: "posting", errorMessage: "" })),
+      }))
+    );
+
+    const tasks = [];
+    entries.forEach((entry, materialIndex) => {
+      entry.batches.forEach((b, batchIndex) => {
+        if (b.status === "success") return;
+        tasks.push({ materialIndex, batchIndex, materialNumber: entry.materialNumber, batch: b.batch, values: entry.values });
+      });
+    });
 
     await Promise.allSettled(
-      entries.map(async (entry, index) => {
-        if (entry.status === "success") return;
+      tasks.map(async ({ materialIndex, batchIndex, materialNumber, batch, values }) => {
         try {
           await postBatchCharacteristics({
-            material: entry.materialNumber,
-            batch: entry.batch,
-            values: entry.values,
-            characteristics: [...BATCH_CHARACTERISTICS, BIN_CHARACTERISTIC],
+            material: materialNumber,
+            batch,
+            values,
+            characteristics: BATCH_CHARACTERISTICS,
           });
-          setEntries((prev) => prev.map((e, i) => (i === index ? { ...e, status: "success", errorMessage: "" } : e)));
+          setBatchStatus(materialIndex, batchIndex, "success");
         } catch (err) {
-          setEntries((prev) =>
-            prev.map((e, i) => (i === index ? { ...e, status: "error", errorMessage: err.message || "Unknown error." } : e))
-          );
+          setBatchStatus(materialIndex, batchIndex, "error", err.message || "Unknown error.");
         }
       })
     );
@@ -83,12 +116,13 @@ function AddBatchCharacteristicsPage({ user, onLogout }) {
         <div style={{ background: "white", borderRadius: "12px", padding: "1.5rem", boxShadow: "0 4px 12px rgba(0,0,0,0.06)" }}>
           <h2 style={{ marginTop: 0 }}>Add Batch Characteristics</h2>
           <div style={{ color: "#6b7280", fontSize: "0.85rem", marginBottom: "1rem" }}>
-            Re-enter and resubmit classification for the batch(es) that failed after posting.
+            Re-enter and resubmit classification for the batch(es) that failed after posting. One set of values per
+            Material is applied to every Batch of that Material listed below it.
           </div>
 
-          {entries.map((entry, index) => (
+          {entries.map((entry, materialIndex) => (
             <div
-              key={`${entry.materialNumber}-${entry.batch}-${index}`}
+              key={`${entry.materialNumber}-${materialIndex}`}
               style={{
                 background: "#fcfcfd",
                 border: "1px solid #eef2f6",
@@ -103,27 +137,26 @@ function AddBatchCharacteristicsPage({ user, onLogout }) {
                 {entry.materialDescription ? ` — ${entry.materialDescription}` : ""}
               </h4>
 
-              <div style={{ display: "flex", flexDirection: "column", marginBottom: "12px" }}>
-                <label style={{ fontSize: "12px", color: "#64748b", marginBottom: "4px" }}>Batch</label>
-                <div
-                  className="form-control"
-                  style={{ backgroundColor: "#f1f5f9", color: "#64748b" }}
-                >
-                  {entry.batch}
-                </div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginBottom: "12px" }}>
+                {entry.batches.map((b) => (
+                  <span
+                    key={b.batch}
+                    title={b.status === "error" ? b.errorMessage : undefined}
+                    style={{
+                      fontSize: "11px",
+                      padding: "3px 8px",
+                      borderRadius: "999px",
+                      background: b.status === "success" ? "#dcfce7" : b.status === "error" ? "#fee2e2" : "#f1f5f9",
+                      color: b.status === "success" ? "#166534" : b.status === "error" ? "#991b1b" : "#64748b",
+                    }}
+                  >
+                    {b.batch}
+                    {b.status === "success" ? " ✓" : b.status === "error" ? " ✗" : b.status === "posting" ? " …" : ""}
+                  </span>
+                ))}
               </div>
 
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "10px" }}>
-                <div className="form-group">
-                  <label style={{ fontSize: "11px", color: "#64748b" }}>{BIN_CHARACTERISTIC.label}</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={entry.values.bin}
-                    onChange={(e) => handleValueChange(index, "bin", e.target.value)}
-                    disabled={loading}
-                  />
-                </div>
                 {BATCH_CHARACTERISTICS.map((charc) => (
                   <div className="form-group" key={charc.id}>
                     <label style={{ fontSize: "11px", color: "#64748b" }}>{charc.label}</label>
@@ -131,22 +164,24 @@ function AddBatchCharacteristicsPage({ user, onLogout }) {
                       type={charc.type === "date" ? "date" : charc.type === "numeric" ? "number" : "text"}
                       className="form-control"
                       value={entry.values[charc.key]}
-                      onChange={(e) => handleValueChange(index, charc.key, e.target.value)}
+                      onChange={(e) => handleValueChange(materialIndex, charc.key, e.target.value)}
                       disabled={loading}
                     />
                   </div>
                 ))}
               </div>
 
-              <div style={{ marginTop: "10px" }}>
-                {entry.status === "posting" && <div style={{ color: "#6b7280", fontSize: "0.85rem" }}>Posting…</div>}
-                {entry.status === "success" && (
-                  <div style={{ color: "#166534", fontSize: "0.85rem" }}>✓ Batch characteristics added.</div>
-                )}
-                {entry.status === "error" && (
-                  <div className="error" style={{ marginTop: "4px" }}>{entry.errorMessage}</div>
-                )}
-              </div>
+              {entry.batches.some((b) => b.status === "error") && (
+                <div style={{ marginTop: "10px" }}>
+                  {entry.batches
+                    .filter((b) => b.status === "error")
+                    .map((b) => (
+                      <div key={b.batch} className="error" style={{ marginTop: "4px" }}>
+                        Batch {b.batch}: {b.errorMessage}
+                      </div>
+                    ))}
+                </div>
+              )}
             </div>
           ))}
         </div>
