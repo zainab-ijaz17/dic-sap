@@ -130,11 +130,12 @@ export async function fetchBatchDocumentInfo(batch, material) {
 
   const record = data.item;
   if (!record) {
-    return { materialDocument: "", purchaseOrder: "", purchaseOrderItem: "", plant: "", storageLocation: "" };
+    return { materialDocument: "", materialDocumentYear: "", purchaseOrder: "", purchaseOrderItem: "", plant: "", storageLocation: "" };
   }
 
   return {
     materialDocument: String(record.MaterialDocument ?? "").trim(),
+    materialDocumentYear: String(record.MaterialDocumentYear ?? "").trim(),
     purchaseOrder: String(record.PurchaseOrder ?? "").trim(),
     purchaseOrderItem: String(record.PurchaseOrderItem ?? "").trim(),
     plant: String(record.Plant ?? "").trim(),

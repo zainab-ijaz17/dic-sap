@@ -10,16 +10,26 @@ function zplEscape(value) {
   return String(value ?? "").replace(/[\^~\\]/g, "");
 }
 
+// One grid field: its heading on one line, its value on the next — used for every
+// field in the grid below instead of "Heading: value" on a single line.
+function fieldLines(x, y, heading, value) {
+  return [
+    `^FO${x},${y}^A0N,22,22^FD${zplEscape(heading)}^FS`,
+    `^FO${x},${y + 30}^A0N,28,28^FD${zplEscape(value)}^FS`,
+  ];
+}
+
 // Builds the ZPL for one Handling Unit/Batch label — 4x6in @ 203dpi (812 x 1218 dots,
 // the standard warehouse label size/resolution; adjust ^PW/^LL here if the real stock
 // turns out to differ). Mirrors the warehouse's existing paper label layout: a Code128
 // barcode of the Batch at the top (no interpretation line — the short description code
 // right below it fills that visual role instead), the Material Description's short
-// code large with the rest of the description wrapped underneath, then Purchase
-// Order/Item, Material/Batch, Material Document/Location and Quantity as a two-column
-// grid.
+// code large with the rest of the description wrapped underneath, then a two-column
+// grid (Purchase Order/Item, Material/Batch, Material Document/Location, Qty/Pallet
+// Qty) with each field's heading above its value.
 export function buildZplLabel(label) {
   const { short: descShort, rest: descRest } = splitMaterialDescription(label.materialDescription);
+  const palletQtyValue = label.palletQuantity != null ? `${label.palletQuantity} ${label.uom}` : "-";
   const lines = [
     "^XA",
     "^CI28",
@@ -29,14 +39,15 @@ export function buildZplLabel(label) {
     `^FO40,180^A0N,50,50^FD${zplEscape(descShort)}^FS`,
     `^FO40,245^A0N,28,28^FB732,2,0,L,0^FD${zplEscape(descRest)}^FS`,
     "^FO40,325^GB732,2,2^FS",
-    `^FO40,355^A0N,28,28^FDPur. Doc.: ${zplEscape(label.purchaseOrder || "-")}^FS`,
-    `^FO420,355^A0N,28,28^FDPur. Item: ${zplEscape(label.purchaseOrderItem || "-")}^FS`,
-    `^FO40,390^A0N,28,28^FDMaterial: ${zplEscape(label.materialNumber)}^FS`,
-    `^FO420,390^A0N,28,28^FDBatch: ${zplEscape(label.batch)}^FS`,
-    `^FO40,425^A0N,28,28^FDMat. Doc.: ${zplEscape(label.materialDocument || "-")}^FS`,
-    `^FO420,425^A0N,28,28^FDLocation: ${zplEscape(label.location || "-")}^FS`,
-    `^FO40,460^A0N,28,28^FDQty: ${zplEscape(label.quantity)} ${zplEscape(label.uom)}^FS`,
-    "^FO40,500^GB732,2,2^FS",
+    ...fieldLines(40, 345, "Pur. Doc.", label.purchaseOrder || "-"),
+    ...fieldLines(420, 345, "Pur. Item", label.purchaseOrderItem || "-"),
+    ...fieldLines(40, 415, "Material", label.materialNumber),
+    ...fieldLines(420, 415, "Batch", label.batch),
+    ...fieldLines(40, 485, "Mat. Doc.", label.materialDocument || "-"),
+    ...fieldLines(420, 485, "Location", label.location || "-"),
+    ...fieldLines(40, 555, "Qty", `${label.quantity} ${label.uom}`),
+    ...fieldLines(420, 555, "Pallet Qty", palletQtyValue),
+    "^FO40,625^GB732,2,2^FS",
     "^XZ",
   ];
   return lines.join("\n");

@@ -6,7 +6,7 @@ import BarcodeInput from "../components/BarcodeInput";
 import BarcodeDisplay from "../components/BarcodeDisplay";
 import { fetchBatchInfo, fetchBatchDocumentInfo } from "../api/batchInfoApi";
 import { fetchBatchQuantity } from "../api/materialStockApi";
-import { fetchPurchaseOrder } from "../api/goodsReceiptApi";
+import { fetchPurchaseOrder, fetchMaterialDocumentItems } from "../api/goodsReceiptApi";
 import { printLabel, reprintLabel } from "../api/labelPrintingApi";
 import { BATCH_BARCODE_MAX_LENGTH } from "../constants/barcode";
 import { validateBarcode } from "../utils/barcodeValidation";
@@ -21,6 +21,25 @@ import { splitMaterialDescription } from "../utils/materialDescription";
 // Printing sends the ZPL to a network Zebra printer via
 // backend/routes/labelPrintingRoutes.js; set LABEL_PRINTER_HOST_DEV/PRD in
 // backend/.env to the real printer IP once known.
+function normalizeKey(value) {
+  return String(value ?? "").trim();
+}
+
+function normalizeMaterial(value) {
+  return String(value || "").trim().replace(/^0+(?=\d)/, "");
+}
+
+// Heading on one line, value on the next — used for every field in the label's grid
+// below instead of "Heading: value" on a single line.
+function LabelField({ heading, value }) {
+  return (
+    <div>
+      <div style={{ fontSize: "0.75rem", color: "#6b7280" }}>{heading}</div>
+      <div style={{ fontWeight: 600 }}>{value}</div>
+    </div>
+  );
+}
+
 function LabelPrintingPage({ user, onLogout }) {
   const navigate = useNavigate();
   const batchInputRef = useRef(null);
@@ -62,6 +81,34 @@ function LabelPrintingPage({ user, onLogout }) {
         }
       }
 
+      // Pallet Qty: one PO line item can post as several to_MaterialDocumentItem
+      // lines, one per pallet, with SAP assigning either a shared Batch across every
+      // pallet-line or a separate Batch per line depending on batch determination
+      // config (see matchBatchesToItems in ../api/goodsReceiptApi.js, which handles
+      // the exact same grouping for GoodReceipt2Page). Pallet Qty sums the Quantity of
+      // every pallet-line sharing this batch's PurchaseOrderItem within the same
+      // Material Document — i.e. the total received across the whole pallet group
+      // this batch is part of, not just this one batch's own share (that's Qty above).
+      let palletQuantity = null;
+      if (docInfo.materialDocument && docInfo.materialDocumentYear) {
+        try {
+          const docItems = await fetchMaterialDocumentItems(docInfo.materialDocument, docInfo.materialDocumentYear);
+          let matches = docInfo.purchaseOrderItem
+            ? docItems.filter((d) => normalizeKey(d.PurchaseOrderItem) === normalizeKey(docInfo.purchaseOrderItem))
+            : [];
+          if (matches.length === 0) {
+            matches = docItems.filter((d) => normalizeMaterial(d.Material) === normalizeMaterial(info.material));
+          }
+          palletQuantity = matches.reduce(
+            (sum, d) => sum + Number(d.QuantityInEntryUnit ?? d.QuantityInBaseUnit ?? 0),
+            0
+          );
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.debug("Pallet Qty lookup failed, leaving it blank:", err.message);
+        }
+      }
+
       // Plant/Storage Location: prefer the batch's current stock location
       // (fetchBatchQuantity), falling back to where the Material Document posted it
       // and then to API_BATCH_SRV's BatchIdentifyingPlant, in case any one source
@@ -74,6 +121,7 @@ function LabelPrintingPage({ user, onLogout }) {
         batch: batchValue,
         quantity: stock.quantity,
         uom: stock.uom,
+        palletQuantity,
         purchaseOrder: docInfo.purchaseOrder,
         purchaseOrderItem: docInfo.purchaseOrderItem,
         materialDocument: docInfo.materialDocument,
@@ -174,14 +222,18 @@ function LabelPrintingPage({ user, onLogout }) {
                   {descRest}
                 </div>
                 <div style={{ borderTop: "1px solid #d1d5db", margin: "0.75rem 0" }} />
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", rowGap: "0.5rem", columnGap: "1rem", fontSize: "0.95rem" }}>
-                  <div><strong>Pur. Doc.:</strong> {label.purchaseOrder || "-"}</div>
-                  <div><strong>Pur. Item:</strong> {label.purchaseOrderItem || "-"}</div>
-                  <div><strong>Material:</strong> {label.materialNumber}</div>
-                  <div><strong>Batch:</strong> {label.batch}</div>
-                  <div><strong>Mat. Doc.:</strong> {label.materialDocument || "-"}</div>
-                  <div><strong>Location:</strong> {label.location || "-"}</div>
-                  <div style={{ gridColumn: "1 / -1" }}><strong>Qty:</strong> {label.quantity} {label.uom}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", rowGap: "0.75rem", columnGap: "1rem", fontSize: "0.95rem" }}>
+                  <LabelField heading="Pur. Doc." value={label.purchaseOrder || "-"} />
+                  <LabelField heading="Pur. Item" value={label.purchaseOrderItem || "-"} />
+                  <LabelField heading="Material" value={label.materialNumber} />
+                  <LabelField heading="Batch" value={label.batch} />
+                  <LabelField heading="Mat. Doc." value={label.materialDocument || "-"} />
+                  <LabelField heading="Location" value={label.location || "-"} />
+                  <LabelField heading="Qty" value={`${label.quantity} ${label.uom}`} />
+                  <LabelField
+                    heading="Pallet Qty"
+                    value={label.palletQuantity != null ? `${label.palletQuantity} ${label.uom}` : "-"}
+                  />
                 </div>
                 <div style={{ marginTop: "0.75rem", color: "#6b7280", fontSize: "0.9rem" }}>
                   {label.printCount > 0 ? `Printed ${label.printCount}x — last at ${label.printedAt}` : "Not printed yet"}
